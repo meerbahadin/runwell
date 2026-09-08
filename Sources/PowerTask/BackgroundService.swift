@@ -131,11 +131,16 @@ final class BackgroundService {
     func windowBecameVisible() {
         isWindowVisible = true
         updateMode()
+        applyActivationPolicy()
     }
 
     func windowBecameHidden() {
         isWindowVisible = false
         updateMode()
+        // The Dock tile goes with the window: a tile implies something to click back
+        // to, and once PowerTask is only recording, the menu bar is the honest place
+        // for it. Reopening from the menu bar brings the tile back.
+        applyActivationPolicy()
     }
 
     /// Section 5.1's cadence table, applied automatically. Each step down is a real
