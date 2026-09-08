@@ -47,7 +47,15 @@ public struct InsightEngine: Sendable {
             let cores = max(4, capabilities.logicalProcessorCount)
             thresholds.sustainedEnergyWatts = 1.0 + Double(cores) / 8.0
             thresholds.backgroundCPUPercent = Double(cores) * 1.5
-            thresholds.wakeupsPerSecond = 100 + Double(cores) * 5
+            // wakeupStorm only ever evaluates background apps (foreground is
+            // excluded above), so this threshold no longer has to sit low enough
+            // to also cover something being actively watched. 436 wakeups/sec was
+            // observed from Chrome playing a YouTube video in the foreground on a
+            // 12-core Mac — ordinary decode/paint/audio cadence, not a problem —
+            // against the old 160/sec threshold. The foreground guard is the real
+            // fix for that case; this raise adds margin so a background app has to
+            // be doing something more genuinely excessive to be named.
+            thresholds.wakeupsPerSecond = 200 + Double(cores) * 15
             return thresholds
         }
     }
@@ -254,6 +262,13 @@ public struct InsightEngine: Sendable {
 
 
         case .wakeupStorm:
+            // The message says "even when it looks idle" — a direct contradiction
+            // if the app is the one you're actively watching. Video playback,
+            // music, anything actually running in front of you legitimately wakes
+            // the processor dozens of times a second; that is not the same signal
+            // as an app doing the same thing while minimized. hiddenBackgroundLoad
+            // already excludes the foreground app for the same reason.
+            guard !isForeground else { return nil }
             guard let wakeups = group.totalWakeupsPerSecond.value,
                   wakeups >= thresholds.wakeupsPerSecond else { return nil }
             // Wakeups are a proxy for battery cost. When the energy counter already

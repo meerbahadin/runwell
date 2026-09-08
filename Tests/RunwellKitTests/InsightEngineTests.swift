@@ -218,6 +218,37 @@ struct InsightEngineTests {
         #expect(raised.contains { $0.rule == .wakeupStorm && $0.appName == "Telegram" })
     }
 
+    /// The field report: Chrome playing a YouTube video, in the foreground, hit 436
+    /// wakeups/sec — ordinary decode/paint/audio cadence — and got told it was
+    /// "draining the battery even when it looks idle", a direct contradiction of
+    /// what the user was actually looking at. wakeupStorm previously had no
+    /// foreground check at all, unlike hiddenBackgroundLoad.
+    @Test("wakeupStorm never fires on the app the user is watching")
+    func wakeupStormExcludesForeground() {
+        let engine = InsightEngine(thresholds: .calibrated(
+            for: CapabilitySet(statuses: [:], osBuild: "test", hardwareModel: "test",
+                               logicalProcessorCount: 12, hasBattery: true)))
+        var state = InsightEngine.State()
+        let now = Date()
+        let chrome = group(name: "Google Chrome", watts: 0, wakeups: 436)
+        let watching = snapshot([chrome])
+
+        _ = engine.evaluate(snapshot: watching, foregroundGroupIDs: [chrome.id],
+                            state: &state, now: now)
+        let raised = engine.evaluate(snapshot: watching, foregroundGroupIDs: [chrome.id],
+                                     state: &state, now: now.addingTimeInterval(90))
+
+        #expect(!raised.contains { $0.rule == .wakeupStorm })
+
+        // The same wakeup count, once Chrome is no longer the foreground app,
+        // still needs to clear the (now higher) background threshold to fire —
+        // confirming this is a real gate, not a coincidence of the count chosen.
+        _ = engine.evaluate(snapshot: watching, foregroundGroupIDs: [], state: &state, now: now)
+        let backgrounded = engine.evaluate(snapshot: watching, foregroundGroupIDs: [],
+                                           state: &state, now: now.addingTimeInterval(90))
+        #expect(backgrounded.contains { $0.rule == .wakeupStorm && $0.appName == "Google Chrome" })
+    }
+
     /// The overview showed Chrome twice — once for wakeups, once for power — which
     /// is one app's story told two ways. One app, one row.
     @Test("An app that trips several rules is listed once")
