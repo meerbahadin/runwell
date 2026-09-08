@@ -49,7 +49,10 @@ final class AppEnvironment {
         insights = insightState.activeInsights
     }
 
-    var areNotificationsEnabled = UserDefaults.standard.object(forKey: "notifications") as? Bool ?? true {
+    /// Off by default. An unexpected banner from a battery monitor reads as noise,
+    /// and Section 1.3's restraint applies to interruptions as much as to sampling:
+    /// the insights are always visible in the app, so notifying is opt-in.
+    var areNotificationsEnabled = UserDefaults.standard.object(forKey: "notifications") as? Bool ?? false {
         didSet { UserDefaults.standard.set(areNotificationsEnabled, forKey: "notifications") }
     }
 
@@ -156,10 +159,9 @@ final class AppEnvironment {
         )
         insights = insightState.activeInsights
 
-        if areNotificationsEnabled {
-            for insight in newlyRaised {
-                NotificationService.shared.post(insight)
-            }
+        if areNotificationsEnabled, !newlyRaised.isEmpty {
+            // Batched: the service decides what is worth interrupting for.
+            NotificationService.shared.post(newlyRaised)
         }
     }
 

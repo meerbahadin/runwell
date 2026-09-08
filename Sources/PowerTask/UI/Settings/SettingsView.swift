@@ -177,7 +177,7 @@ struct SettingsView: View {
             ))
             // Section 8.3: rules need a condition to hold, so alerts do not fire on
             // a momentary spike.
-            Text("PowerTask only alerts when a condition lasts — at least a minute of high energy, or two minutes of background activity.")
+            Text("Off by default. PowerTask only alerts when a condition lasts — at least a minute of high energy, or two minutes of background activity — and never sends more than one notification every few minutes. Insights always appear in the app regardless of this setting.")
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }

@@ -176,6 +176,25 @@ struct InsightEngineTests {
         #expect(insight?.message == "Chrome has used high measured energy for the last minute.")
     }
 
+    @Test("A heavy workload raises many insights at once")
+    func manySimultaneousInsights() {
+        // The condition that produced a wall of notifications: several apps crossing
+        // a threshold in the same cycle. The engine is right to raise them all — the
+        // rate limiting belongs in the notifier, not here, so that the app can still
+        // show every one of them.
+        let engine = InsightEngine()
+        var state = InsightEngine.State()
+        let now = Date()
+        let busy = snapshot([
+            group(name: "A", watts: 6), group(name: "B", watts: 6),
+            group(name: "C", watts: 6), group(name: "D", watts: 6),
+        ])
+        _ = engine.evaluate(snapshot: busy, foregroundGroupIDs: [], state: &state, now: now)
+        let raised = engine.evaluate(snapshot: busy, foregroundGroupIDs: [], state: &state,
+                                     now: now.addingTimeInterval(61))
+        #expect(raised.filter { $0.rule == .sustainedEnergy }.count == 4)
+    }
+
     @Test("Thresholds scale with the machine")
     func calibration() {
         let small = InsightEngine.Thresholds.calibrated(for: CapabilitySet(
