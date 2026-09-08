@@ -23,9 +23,11 @@ final class AppEnvironment {
     }
     var searchText = ""
     var selectedGroupID: ApplicationGroupID?
-    var normalizeCPU = false {
-        didSet { Task { await sampler.setNormalizeCPU(normalizeCPU) } }
-    }
+    /// Section 5.3 display preference only — raw macOS-style CPU percentage divided
+    /// across cores. Nothing measures, groups, ranks, alerts on, or persists this
+    /// number; it is applied at the point of formatting for the user, via
+    /// `displayCPU(_:normalize:coreCount:)`, and nowhere else.
+    var normalizeCPU = false
 
     private var frozenOrder: [ApplicationGroupID]?
     private let sampler: SamplerService
@@ -215,9 +217,10 @@ final class AppEnvironment {
         guard pruneTask == nil else { return }
         pruneTask = Task { [weak self] in
             while !Task.isCancelled {
-                if let history = await self?.history {
-                    try? await history.prune()
-                }
+                // A plain (non-detached) Task inherits the enclosing @MainActor
+                // context, so reading self?.history here needs no await at all —
+                // only the actor-hopping call into HistoryStore below does.
+                if let history = self?.history { try? await history.prune() }
                 try? await Task.sleep(for: .seconds(3600))
             }
         }

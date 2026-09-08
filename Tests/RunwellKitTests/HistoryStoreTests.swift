@@ -23,14 +23,14 @@ struct HistoryStoreTests {
 
     private func snapshot(
         app: String, energyNJ: UInt64, cpu: Double = 10, percentage: Double = 80,
-        onBattery: Bool = true, first: Bool = false
+        onBattery: Bool = true, first: Bool = false, intervalSeconds: Double = 2
     ) -> SamplerSnapshot {
         let id = identity(name: app)
         let metrics = ProcessIntervalMetrics(
-            key: id.key, identity: id, intervalSeconds: 2,
+            key: id.key, identity: id, intervalSeconds: intervalSeconds,
             cpuPercent: .derived(cpu),
             physicalFootprintBytes: .measured(2048),
-            energyWatts: .derived(Double(energyNJ) / 2 / 1_000_000_000),
+            energyWatts: .derived(Double(energyNJ) / intervalSeconds / 1_000_000_000),
             energyDeltaNJ: energyNJ,
             diskReadBytesPerSecond: .derived(100),
             diskWriteBytesPerSecond: .derived(0),
@@ -55,6 +55,43 @@ struct HistoryStoreTests {
                                         logicalProcessorCount: 8, hasBattery: true),
             mode: .foreground, cycleDuration: .milliseconds(50),
             skippedCycles: 0, isFirstSample: first
+        )
+    }
+
+    /// A sample where the process could not actually be read — permission denied
+    /// is the common real cause. Every metric is `.unavailable`, not a measured
+    /// zero, which is exactly the distinction the zero-as-unavailable regression
+    /// tests below depend on.
+    private func unreadableSnapshot(app: String, intervalSeconds: Double = 2) -> SamplerSnapshot {
+        let id = identity(name: app)
+        let metrics = ProcessIntervalMetrics(
+            key: id.key, identity: id, intervalSeconds: intervalSeconds,
+            cpuPercent: .unavailable(.permissionDenied),
+            physicalFootprintBytes: .unavailable(.permissionDenied),
+            energyWatts: .unavailable(.permissionDenied),
+            energyDeltaNJ: nil,
+            diskReadBytesPerSecond: .unavailable(.permissionDenied),
+            diskWriteBytesPerSecond: .unavailable(.permissionDenied),
+            wakeupsPerSecond: .unavailable(.permissionDenied)
+        )
+        let group = ApplicationGroup(
+            id: id.groupID, displayName: app, bundleURL: nil,
+            members: [metrics], status: .normal
+        )
+        let battery = BatterySnapshot(
+            percentage: .measured(80), powerSource: .battery,
+            isCharging: false, isCharged: false, isPresent: true,
+            timeRemaining: .unavailable(.awaitingSecondSample),
+            capturedAt: MonotonicInstant.now()
+        )
+        return SamplerSnapshot(
+            sessionID: SampleSessionID(), groups: [group],
+            coverage: EnergyCoverage(groups: [group], accessibleEnergyNJ: 0, inaccessibleProcessCount: 1),
+            battery: battery,
+            capabilities: CapabilitySet(statuses: [:], osBuild: "test", hardwareModel: "test",
+                                        logicalProcessorCount: 8, hasBattery: true),
+            mode: .foreground, cycleDuration: .milliseconds(50),
+            skippedCycles: 0, isFirstSample: false
         )
     }
 
@@ -261,6 +298,99 @@ struct HistoryStoreTests {
         let breakdown = try await store.energyBreakdown(
             from: now.addingTimeInterval(-3600), to: now.addingTimeInterval(3600))
         #expect(abs((breakdown.rows.first?.averageWatts ?? 0) - 1.0) < 0.001)
+    }
+
+    /// Regression test: observed duration used to be reconstructed at read time as
+    /// `sampleCount * 2`, hardcoding the foreground cadence regardless of which
+    /// sampling mode actually produced each sample. A single 10-second sample (the
+    /// battery-idle interval) carrying 10 J is 1 watt on average — the old formula
+    /// would have called it `1 * 2 = 2` observed seconds, reporting 5 watts, 5x high.
+    @Test("Average power is correct for samples outside the foreground interval")
+    func averageWattsOutsideForeground() async throws {
+        let url = temporaryURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let store = try HistoryStore(url: url)
+        let now = Date()
+
+        try await store.record(
+            snapshot(app: "Backgrounded", energyNJ: 10_000_000_000, intervalSeconds: 10),
+            at: now)
+        let breakdown = try await store.energyBreakdown(
+            from: now.addingTimeInterval(-3600), to: now.addingTimeInterval(3600))
+        #expect(abs((breakdown.rows.first?.averageWatts ?? 0) - 1.0) < 0.001)
+    }
+
+    /// Mixed-mode history — some samples recorded while foregrounded, some while
+    /// backgrounded — must sum actual observed seconds across the mix, not assume
+    /// a single interval for the whole bucket.
+    @Test("Average power over a mix of sampling intervals sums true observed seconds")
+    func averageWattsMixedIntervals() async throws {
+        let url = temporaryURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let store = try HistoryStore(url: url)
+        let now = Date()
+
+        // 2s foreground sample: 2 J. Then a 10s battery-idle sample: 10 J.
+        // Total: 12 J over 12 true seconds = exactly 1 watt.
+        try await store.record(
+            snapshot(app: "Mixed", energyNJ: 2_000_000_000, intervalSeconds: 2), at: now)
+        try await store.record(
+            snapshot(app: "Mixed", energyNJ: 10_000_000_000, intervalSeconds: 10),
+            at: now.addingTimeInterval(2))
+        let breakdown = try await store.energyBreakdown(
+            from: now.addingTimeInterval(-3600), to: now.addingTimeInterval(3600))
+        #expect(abs((breakdown.rows.first?.averageWatts ?? 0) - 1.0) < 0.001)
+    }
+
+    // MARK: - Section 3 / Appendix F: unavailable is not zero
+
+    /// Regression test: an app that was never readable across a window used to be
+    /// summed as 0 J and reported as "barely any power — 0.00 W", a specific and
+    /// wrong claim rather than an honest "could not measure".
+    @Test("An app never readable in a window reports no energy, not zero")
+    func neverReadableReportsNilEnergy() async throws {
+        let url = temporaryURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let store = try HistoryStore(url: url)
+        let now = Date()
+
+        try await store.record(unreadableSnapshot(app: "Sandboxed"), at: now)
+        let breakdown = try await store.energyBreakdown(
+            from: now.addingTimeInterval(-3600), to: now.addingTimeInterval(3600))
+
+        let row = try #require(breakdown.rows.first { $0.displayName == "Sandboxed" })
+        #expect(row.energyNJ == nil)
+        #expect(row.averageWatts == nil)
+        #expect(row.averageCPUPercent == nil)
+        #expect(row.peakMemoryBytes == nil)
+        // An unmeasurable app has no share of what could be measured, not a
+        // fabricated one — the visual is "no bar", the same as genuinely zero
+        // usage, but the underlying number is honestly absent.
+        #expect(breakdown.share(of: row) == 0)
+    }
+
+    /// An app unreadable for part of a window, then readable, must report the
+    /// average of the samples that were actually readable — not have its true
+    /// average silently diluted by treating the unreadable half as measured zeros.
+    @Test("Average power is computed only from the samples that were readable")
+    func partiallyReadableAveragesOnlyReadableSamples() async throws {
+        let url = temporaryURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let store = try HistoryStore(url: url)
+        let now = Date()
+
+        // One unreadable 2s cycle, then one readable 2s cycle carrying 2 J (1 W).
+        // The old formula divided by total sample_count (2), halving the true
+        // average to 0.5 W; the fix divides only by the one readable sample.
+        try await store.record(unreadableSnapshot(app: "Flaky"), at: now)
+        try await store.record(
+            snapshot(app: "Flaky", energyNJ: 2_000_000_000, intervalSeconds: 2),
+            at: now.addingTimeInterval(2))
+
+        let breakdown = try await store.energyBreakdown(
+            from: now.addingTimeInterval(-3600), to: now.addingTimeInterval(3600))
+        let row = try #require(breakdown.rows.first { $0.displayName == "Flaky" })
+        #expect(abs((row.averageWatts ?? 0) - 1.0) < 0.001)
     }
 
     @Test("Charging samples do not count as a discharge session")

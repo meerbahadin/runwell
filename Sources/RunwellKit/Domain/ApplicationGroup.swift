@@ -53,8 +53,32 @@ public struct ApplicationGroup: Sendable, Identifiable {
         })
     }
 
+    /// Sums unconditionally, treating an unreadable member's delta as zero rather
+    /// than absent. That is the right behaviour for `EnergyCoverage.measuredAppShare`,
+    /// which needs a plain total — an unmeasurable process correctly contributes
+    /// nothing to a share of what *was* measured, and that is a different claim
+    /// from "unknown". For anything that means to report this app's own energy,
+    /// use `totalEnergyDelta` below instead, which keeps that distinction.
     public var totalEnergyDeltaNJ: UInt64 {
         members.reduce(UInt64(0)) { $0 &+ ($1.energyDeltaNJ ?? 0) }
+    }
+
+    /// The same total as `totalEnergyDeltaNJ`, but honest about absence: unavailable
+    /// when every member's delta was unreadable, and degraded in confidence when
+    /// only some were — mirroring exactly how `totalEnergyWatts` already handles
+    /// this via `sum`. `totalEnergyDeltaNJ` cannot express this because it returns
+    /// a bare `UInt64`; this is what a persistence or display path that means to
+    /// say "this app's energy" should read, so an unreadable app is stored as
+    /// unknown rather than as a silently reported zero.
+    public var totalEnergyDelta: IntervalMetric<UInt64> {
+        Self.sum(members.map { m in
+            IntervalMetric<UInt64>(
+                value: m.energyDeltaNJ,
+                provenance: m.energyWatts.provenance,
+                confidence: m.energyWatts.confidence,
+                reasonUnavailable: m.energyWatts.reasonUnavailable
+            )
+        })
     }
 
     /// Section 8.3 wakeup storm evidence.

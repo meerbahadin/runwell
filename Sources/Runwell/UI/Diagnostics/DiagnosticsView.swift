@@ -131,9 +131,17 @@ struct DiagnosticsView: View {
         // The snapshot's own groups, not `environment.groups`: that one is the
         // table's view of the world, narrowed by the search field and re-sorted.
         // A diagnostic must not change with what is typed in a search box.
+        //
+        // captured/displayAsleep come from the same snapshot rather than a second,
+        // independent IOKit probe made inside the view: `body` calling out to
+        // hardware on every redraw was wasted work at best, and at worst could
+        // read a state a moment removed from the one the rest of this screen
+        // (and any insight raised from it) is describing.
         SleepAssertionPanel(
             groups: environment.snapshot?.groups ?? [],
-            actions: environment.actions
+            actions: environment.actions,
+            captured: environment.snapshot?.sleepAssertions ?? nil,
+            displayAsleep: environment.snapshot?.displayIsAsleep ?? false
         )
     }
 
@@ -183,16 +191,17 @@ struct DiagnosticsView: View {
 struct SleepAssertionPanel: View {
     let groups: [ApplicationGroup]
     let actions: ProcessActionService
-
-    private let collector = SleepAssertionCollector()
+    /// Read from the sampler's own snapshot rather than probed by this view: a
+    /// second, independent IOKit call inside `body` re-ran on every redraw and
+    /// could disagree with what the rest of the app — including any raised
+    /// insight — was already describing for the same cycle.
+    let captured: [SleepAssertionCollector.Assertion]?
+    let displayAsleep: Bool
 
     @State private var confirming: SleepAssertionCollector.Assertion?
     @State private var outcome: String?
 
     var body: some View {
-        let displayAsleep = collector.displayIsAsleep()
-        let captured = collector.capture()
-
         VStack(alignment: .leading, spacing: 10) {
             Text("Sleep prevention").font(.headline)
 

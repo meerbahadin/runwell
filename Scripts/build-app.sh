@@ -16,13 +16,40 @@ APP="$ROOT/build/Runwell.app"
 # Keep development under its own identifier; release.sh overrides this.
 BUNDLE_ID="${BUNDLE_ID:-com.runwell.Runwell.dev}"
 
-echo "Building ($CONFIG)…"
-swift build -c "$CONFIG" --package-path "$ROOT"
-BIN="$(swift build -c "$CONFIG" --package-path "$ROOT" --show-bin-path)/Runwell"
+# macOS 15 (LSMinimumSystemVersion, below) supports Intel Macs as well as Apple
+# silicon, but `swift build` alone only ever produces the host machine's
+# architecture. A single-arch release built on Apple silicon simply will not launch
+# on an Intel Mac — Gatekeeper never gets the chance to reject it; the OS reports
+# it as damaged/incompatible. UNIVERSAL=1 builds and merges both slices, which
+# release.sh always sets; local dev builds default to the fast single-arch path.
+UNIVERSAL="${UNIVERSAL:-0}"
+
+# One source of truth for the marketing version; release.sh requires this to have
+# been bumped since the last tag before it will ship. The build number is the git
+# commit count, which is monotonic by construction — no separate counter to forget
+# to increment, and every build has a distinct, orderable identity for support.
+MARKETING_VERSION="$(cat "$ROOT/VERSION" | tr -d '[:space:]')"
+BUILD_NUMBER="$(git -C "$ROOT" rev-list --count HEAD 2>/dev/null || echo 0)"
+
+echo "Building ($CONFIG, version $MARKETING_VERSION build $BUILD_NUMBER)…"
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp "$BIN" "$APP/Contents/MacOS/Runwell"
+
+if [ "$UNIVERSAL" = "1" ]; then
+  echo "  -> arm64"
+  swift build -c "$CONFIG" --package-path "$ROOT" --triple arm64-apple-macosx15.0
+  ARM_BIN="$(swift build -c "$CONFIG" --package-path "$ROOT" --triple arm64-apple-macosx15.0 --show-bin-path)/Runwell"
+  echo "  -> x86_64"
+  swift build -c "$CONFIG" --package-path "$ROOT" --triple x86_64-apple-macosx15.0
+  X86_BIN="$(swift build -c "$CONFIG" --package-path "$ROOT" --triple x86_64-apple-macosx15.0 --show-bin-path)/Runwell"
+  lipo -create -output "$APP/Contents/MacOS/Runwell" "$ARM_BIN" "$X86_BIN"
+  echo "  -> $(lipo -info "$APP/Contents/MacOS/Runwell")"
+else
+  swift build -c "$CONFIG" --package-path "$ROOT"
+  BIN="$(swift build -c "$CONFIG" --package-path "$ROOT" --show-bin-path)/Runwell"
+  cp "$BIN" "$APP/Contents/MacOS/Runwell"
+fi
 
 # The app icon. Resources/Runwell.icon is the Icon Composer source; the .icns is
 # the rendered form macOS reads from the bundle.
@@ -44,8 +71,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <key>CFBundleName</key>              <string>Runwell</string>
     <key>CFBundleDisplayName</key>       <string>Runwell</string>
     <key>CFBundleIdentifier</key>        <string>__BUNDLE_ID__</string>
-    <key>CFBundleVersion</key>           <string>1.0</string>
-    <key>CFBundleShortVersionString</key><string>1.0</string>
+    <key>CFBundleVersion</key>           <string>__BUILD_NUMBER__</string>
+    <key>CFBundleShortVersionString</key><string>__MARKETING_VERSION__</string>
     <key>CFBundleExecutable</key>        <string>Runwell</string>
     <key>CFBundleIconFile</key>          <string>Runwell</string>
     <key>CFBundlePackageType</key>       <string>APPL</string>
@@ -62,10 +89,14 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 PLIST
 
 # Substituted after the heredoc so the plist stays a literal block.
-/usr/bin/sed -i '' "s|__BUNDLE_ID__|$BUNDLE_ID|" "$APP/Contents/Info.plist"
+/usr/bin/sed -i '' \
+  -e "s|__BUNDLE_ID__|$BUNDLE_ID|" \
+  -e "s|__BUILD_NUMBER__|$BUILD_NUMBER|" \
+  -e "s|__MARKETING_VERSION__|$MARKETING_VERSION|" \
+  "$APP/Contents/Info.plist"
 
 # Ad-hoc signature for local runs; a Developer ID identity replaces this at release.
 codesign --force --sign - --timestamp=none "$APP" 2>/dev/null || \
   echo "warning: ad-hoc signing failed; the app will still run locally"
 
-echo "Built $APP ($BUNDLE_ID)"
+echo "Built $APP ($BUNDLE_ID, v$MARKETING_VERSION build $BUILD_NUMBER)"

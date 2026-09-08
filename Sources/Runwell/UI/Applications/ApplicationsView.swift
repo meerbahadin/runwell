@@ -97,6 +97,8 @@ struct ApplicationRow: View {
     let share: IntervalMetric<Double>?
     let onToggle: () -> Void
 
+    @Environment(AppEnvironment.self) private var environment
+
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 12) {
@@ -157,7 +159,11 @@ struct ApplicationRow: View {
 
                 MetricText(metric: group.totalEnergyWatts, format: "%.2f", suffix: " W")
                     .frame(width: 90, alignment: .trailing)
-                MetricText(metric: group.totalCPUPercent, format: "%.1f", suffix: "%")
+                MetricText(
+                    metric: displayCPU(group.totalCPUPercent, normalize: environment.normalizeCPU,
+                                      coreCount: environment.capabilities.logicalProcessorCount),
+                    format: "%.1f", suffix: "%"
+                )
                     .frame(width: 70, alignment: .trailing)
                 MemoryText(metric: group.totalFootprintBytes)
                     .frame(width: 90, alignment: .trailing)
@@ -188,7 +194,10 @@ struct ApplicationRow: View {
         var parts = [group.displayName]
         if group.processCount > 1 { parts.append("\(group.processCount) processes") }
         parts.append("Energy \(group.totalEnergyWatts.formatted("%.2f", suffix: " watts")), \(group.totalEnergyWatts.provenance.badge)")
-        parts.append("CPU \(group.totalCPUPercent.formatted("%.1f", suffix: " percent"))")
+        // VoiceOver should say the same number that is on screen.
+        let cpu = displayCPU(group.totalCPUPercent, normalize: environment.normalizeCPU,
+                             coreCount: environment.capabilities.logicalProcessorCount)
+        parts.append("CPU \(cpu.formatted("%.1f", suffix: " percent"))")
         if let bytes = group.totalFootprintBytes.value {
             parts.append("Memory \(ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .memory))")
         }
@@ -200,6 +209,8 @@ struct ApplicationRow: View {
 /// A child process inside an expanded application group.
 struct ProcessSubRow: View {
     let metrics: ProcessIntervalMetrics
+
+    @Environment(AppEnvironment.self) private var environment
 
     var body: some View {
         HStack(spacing: 12) {
@@ -218,7 +229,11 @@ struct ProcessSubRow: View {
 
             MetricText(metric: metrics.energyWatts, format: "%.2f", suffix: " W")
                 .frame(width: 90, alignment: .trailing)
-            MetricText(metric: metrics.cpuPercent, format: "%.1f", suffix: "%")
+            MetricText(
+                metric: displayCPU(metrics.cpuPercent, normalize: environment.normalizeCPU,
+                                   coreCount: environment.capabilities.logicalProcessorCount),
+                format: "%.1f", suffix: "%"
+            )
                 .frame(width: 70, alignment: .trailing)
             MemoryText(metric: metrics.physicalFootprintBytes)
                 .frame(width: 90, alignment: .trailing)

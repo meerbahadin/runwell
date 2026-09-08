@@ -119,7 +119,11 @@ struct ProcessDetailView: View {
         Grid(alignment: .leading, horizontalSpacing: 24, verticalSpacing: 10) {
             GridRow {
                 metricCell("Energy", MetricText(metric: group.totalEnergyWatts, format: "%.2f", suffix: " W"))
-                metricCell("CPU", MetricText(metric: group.totalCPUPercent, format: "%.1f", suffix: "%"))
+                metricCell("CPU", MetricText(
+                    metric: displayCPU(group.totalCPUPercent, normalize: environment.normalizeCPU,
+                                       coreCount: environment.capabilities.logicalProcessorCount),
+                    format: "%.1f", suffix: "%"
+                ))
             }
             GridRow {
                 metricCell("Memory", MemoryText(metric: group.totalFootprintBytes))
@@ -162,7 +166,11 @@ struct ProcessDetailView: View {
                         Spacer()
                         MetricText(metric: member.energyWatts, format: "%.2f", suffix: " W")
                             .font(.callout)
-                        MetricText(metric: member.cpuPercent, format: "%.1f", suffix: "%")
+                        MetricText(
+                            metric: displayCPU(member.cpuPercent, normalize: environment.normalizeCPU,
+                                               coreCount: environment.capabilities.logicalProcessorCount),
+                            format: "%.1f", suffix: "%"
+                        )
                             .font(.callout).frame(width: 60, alignment: .trailing)
                     }
                     HStack(spacing: 8) {

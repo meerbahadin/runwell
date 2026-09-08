@@ -16,22 +16,17 @@ public struct MetricEngine: Sendable {
         /// multithreaded process. A value beyond every core running flat out is a
         /// counter artifact, not a busy process.
         public var implausibleCPUPercentMultiplier: Double
-        /// Section 5.3: default to raw macOS-style percentage; a setting switches
-        /// to a normalized 0-100% display.
-        public var normalizeCPUToCoreCount: Bool
         public var logicalProcessorCount: Int
 
         public init(
             maximumIntervalSeconds: Double = 60,
             minimumIntervalSeconds: Double = 0.2,
             implausibleCPUPercentMultiplier: Double = 1.5,
-            normalizeCPUToCoreCount: Bool = false,
             logicalProcessorCount: Int = ProcessInfo.processInfo.activeProcessorCount
         ) {
             self.maximumIntervalSeconds = maximumIntervalSeconds
             self.minimumIntervalSeconds = minimumIntervalSeconds
             self.implausibleCPUPercentMultiplier = implausibleCPUPercentMultiplier
-            self.normalizeCPUToCoreCount = normalizeCPUToCoreCount
             self.logicalProcessorCount = logicalProcessorCount
         }
     }
@@ -97,17 +92,24 @@ public struct MetricEngine: Sendable {
 
         // Section 5.3:
         //   rawCPUPercent = 100 * delta(userTimeNS + systemTimeNS) / deltaWallTimeNS
+        //
+        // This is always the raw, unnormalized figure. Normalization used to happen
+        // here, which meant a display preference silently rewrote the canonical
+        // value every other consumer reads: InsightEngine's background-CPU
+        // threshold, ApplicationGrouper's grouping heuristic, sort order, and
+        // HistoryStore all compared against or persisted whatever number came out
+        // of this function — so flipping "normalize CPU" in Settings changed what a
+        // fixed threshold like 15% actually meant, by up to the core count. The
+        // engine now has exactly one canonical value; normalizing for display is
+        // the UI layer's job, done to a copy, at the point of formatting only.
         let cpuPercent: IntervalMetric<Double>
         if let deltaCPU = Self.counterDelta(previous.totalCPUTimeNS, current.totalCPUTimeNS) {
-            var percent = 100 * Double(deltaCPU) / (seconds * 1_000_000_000)
+            let percent = 100 * Double(deltaCPU) / (seconds * 1_000_000_000)
             let ceiling = 100 * Double(configuration.logicalProcessorCount)
                 * configuration.implausibleCPUPercentMultiplier
             if percent > ceiling {
                 cpuPercent = .unavailable(.invalidInterval)
             } else {
-                if configuration.normalizeCPUToCoreCount {
-                    percent /= Double(configuration.logicalProcessorCount)
-                }
                 cpuPercent = .derived(percent)
             }
         } else {

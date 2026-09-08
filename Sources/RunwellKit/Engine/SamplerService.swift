@@ -8,7 +8,13 @@ public enum SamplingMode: String, Sendable, CaseIterable {
     case batteryIdle
     case lowPowerMode
     case diagnosticBurst
+    /// The user turned background recording off and the window is closed. Unlike
+    /// every other mode, this one produces no samples at all: it exists so "stops
+    /// recording" is an actual code path rather than just the slowest cadence.
+    case paused
 
+    /// Meaningless for `.paused` — the run loop checks `isPaused` before ever
+    /// reading this, so it never sleeps for this duration on this mode's account.
     public var interval: Duration {
         switch self {
         case .foreground: .seconds(2)
@@ -16,6 +22,7 @@ public enum SamplingMode: String, Sendable, CaseIterable {
         case .batteryIdle: .seconds(10)
         case .lowPowerMode: .seconds(15)
         case .diagnosticBurst: .seconds(1)
+        case .paused: .seconds(30)
         }
     }
 
@@ -26,8 +33,11 @@ public enum SamplingMode: String, Sendable, CaseIterable {
         case .batteryIdle: 10
         case .lowPowerMode: 15
         case .diagnosticBurst: 1
+        case .paused: 30
         }
     }
+
+    public var isPaused: Bool { self == .paused }
 
     public var description: String {
         switch self {
@@ -36,6 +46,7 @@ public enum SamplingMode: String, Sendable, CaseIterable {
         case .batteryIdle: "Every 10 seconds (on battery)"
         case .lowPowerMode: "Every 15 seconds (Low Power Mode)"
         case .diagnosticBurst: "Every second (diagnostic burst)"
+        case .paused: "Not recording"
         }
     }
 }
@@ -128,10 +139,6 @@ public actor SamplerService {
 
     public func currentMode() -> SamplingMode { mode }
 
-    public func setNormalizeCPU(_ normalize: Bool) {
-        metricEngine.configuration.normalizeCPUToCoreCount = normalize
-    }
-
     /// Section 7.3. A new session at every boundary — collector restart, wake from
     /// sleep, power-source transition — so deltas never bridge across one.
     public func beginNewSession() {
@@ -143,7 +150,13 @@ public actor SamplerService {
     public func run() async {
         while !Task.isCancelled {
             let interval = mode.interval
-            await tick()
+            // Paused means paused: no collector call, no snapshot, no write to
+            // history. The loop still wakes on `interval` so a mode change (window
+            // reopened, setting flipped) is noticed promptly rather than only on
+            // the next natural tick.
+            if !mode.isPaused {
+                await tick()
+            }
             try? await Task.sleep(for: interval)
         }
     }
@@ -245,7 +258,9 @@ public actor SamplerService {
                 switch mode {
                 case .foreground: mode = .menuBarOnly
                 case .menuBarOnly: mode = .batteryIdle
-                case .batteryIdle, .lowPowerMode, .diagnosticBurst: break
+                // Reached only from a completed tick, and .paused never ticks —
+                // still handled so the switch stays exhaustive against the enum.
+                case .batteryIdle, .lowPowerMode, .diagnosticBurst, .paused: break
                 }
             }
         } else {

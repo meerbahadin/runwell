@@ -495,8 +495,15 @@ struct HistoryView: View {
     /// Translates average power into something recognisable. Watts are the unit people
     /// already read off appliances, and the phrasing stays comparative rather than
     /// claiming a share of the battery pack, which Section 3.1 forbids.
+    ///
+    /// Section 3 / Appendix F: a row can now genuinely have no measurable energy for
+    /// the whole window rather than a coalesced 0 — an unreadable process previously
+    /// reported "barely any power — 0.00 W", which is a specific, wrong claim dressed
+    /// up as a modest one. That case says plainly that nothing could be measured.
     private func comparison(_ row: HistoryStore.BucketRow) -> String {
-        let watts = row.averageWatts
+        guard let watts = row.averageWatts else {
+            return "Could not measure this app's energy in this window."
+        }
         let level: String
         switch watts {
         case ..<0.05:  level = "barely any power"

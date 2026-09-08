@@ -110,21 +110,52 @@ public actor HistoryStore {
                 ON CONFLICT(id) DO UPDATE SET last_seen = excluded.last_seen,
                                               display_name = excluded.display_name
                 """)
+            // Section 3 / Appendix F: each metric's sum and max/avg only ever
+            // advance on a sample that actually carried that value — an
+            // unavailable reading contributes nothing, not a zero, to any of
+            // these. `energy_sample_count` etc. record how many samples a metric's
+            // average is genuinely computed over, which need not equal
+            // `sample_count` when one signal drops out while others keep reading.
+            // A metric's own count reaching zero is what lets the read path say
+            // "unavailable" rather than reporting a confident average of nothing.
             let insertBucket = try database.prepare("""
                 INSERT INTO bucket (app_group_id, bucket_start, granularity, session_id,
                                     energy_nj_sum, cpu_percent_sum, cpu_percent_max,
                                     memory_bytes_avg, memory_bytes_max,
-                                    disk_bytes_sum, sample_count, coverage_confidence)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+                                    disk_bytes_sum, sample_count, coverage_confidence,
+                                    interval_seconds_sum,
+                                    energy_sample_count, cpu_sample_count,
+                                    memory_sample_count, disk_sample_count)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(app_group_id, bucket_start, granularity) DO UPDATE SET
-                    energy_nj_sum    = energy_nj_sum + excluded.energy_nj_sum,
-                    cpu_percent_sum  = cpu_percent_sum + excluded.cpu_percent_sum,
-                    cpu_percent_max  = MAX(cpu_percent_max, excluded.cpu_percent_max),
-                    memory_bytes_avg = (memory_bytes_avg * sample_count + excluded.memory_bytes_avg)
-                                       / (sample_count + 1),
-                    memory_bytes_max = MAX(memory_bytes_max, excluded.memory_bytes_max),
-                    disk_bytes_sum   = disk_bytes_sum + excluded.disk_bytes_sum,
-                    sample_count     = sample_count + 1
+                    energy_nj_sum    = CASE WHEN ?13 THEN energy_nj_sum + excluded.energy_nj_sum
+                                             ELSE energy_nj_sum END,
+                    energy_sample_count = energy_sample_count + excluded.energy_sample_count,
+                    cpu_percent_sum  = CASE WHEN ?14 THEN cpu_percent_sum + excluded.cpu_percent_sum
+                                             ELSE cpu_percent_sum END,
+                    cpu_percent_max  = CASE WHEN ?14 THEN MAX(cpu_percent_max, excluded.cpu_percent_max)
+                                             ELSE cpu_percent_max END,
+                    cpu_sample_count = cpu_sample_count + excluded.cpu_sample_count,
+                    memory_bytes_avg = CASE WHEN ?15 THEN
+                        (memory_bytes_avg * memory_sample_count + excluded.memory_bytes_avg)
+                        / (memory_sample_count + 1)
+                        ELSE memory_bytes_avg END,
+                    memory_bytes_max = CASE WHEN ?15 THEN MAX(memory_bytes_max, excluded.memory_bytes_max)
+                                             ELSE memory_bytes_max END,
+                    memory_sample_count = memory_sample_count + excluded.memory_sample_count,
+                    disk_bytes_sum   = CASE WHEN ?16 THEN disk_bytes_sum + excluded.disk_bytes_sum
+                                             ELSE disk_bytes_sum END,
+                    disk_sample_count = disk_sample_count + excluded.disk_sample_count,
+                    sample_count     = sample_count + 1,
+                    -- Seconds actually covered by a sample that carried real
+                    -- energy, which is what averageWatts (energy / this) divides
+                    -- by. Counting seconds from unreadable samples too — as this
+                    -- used to — dilutes the average with time no energy was ever
+                    -- attributed to, the same silent-zero problem as the sums
+                    -- above, just showing up in the denominator instead.
+                    interval_seconds_sum = CASE WHEN ?13
+                        THEN interval_seconds_sum + excluded.interval_seconds_sum
+                        ELSE interval_seconds_sum END
                 """)
 
             for group in snapshot.groups {
@@ -135,13 +166,25 @@ public actor HistoryStore {
                     .bind(4, timestamp).bind(5, timestamp)
                     .run()
 
-                let energy = Int64(group.totalEnergyDeltaNJ)
-                let cpu = group.totalCPUPercent.value ?? 0
-                let memory = Int64(group.totalFootprintBytes.value ?? 0)
+                let energyMetric = group.totalEnergyDelta
+                let energy = Int64(energyMetric.value ?? 0)
+                let energyAvailable = energyMetric.isAvailable
+
+                let cpuMetric = group.totalCPUPercent
+                let cpu = cpuMetric.value ?? 0
+                let cpuAvailable = cpuMetric.isAvailable
+
+                let memoryMetric = group.totalFootprintBytes
+                let memory = Int64(memoryMetric.value ?? 0)
+                let memoryAvailable = memoryMetric.isAvailable
+
                 // Bytes over the interval, not a rate: summing rates across buckets
                 // of different lengths would be meaningless.
                 let interval = group.members.first?.intervalSeconds ?? 0
-                let disk = group.totalDiskBytesPerSecond.value.map { Int64($0 * interval) } ?? 0
+                let diskMetric = group.totalDiskBytesPerSecond
+                let disk = diskMetric.value.map { Int64($0 * interval) } ?? 0
+                let diskAvailable = diskMetric.isAvailable
+
                 // Section 3: confidence travels with the value, so a bucket built from
                 // partly unreadable processes can be shown as such rather than implying
                 // the same certainty as a fully measured one.
@@ -150,9 +193,20 @@ public actor HistoryStore {
                 for (start, granularity) in [(minute, "1m"), (quarterHour, "15m")] {
                     try insertBucket
                         .bind(1, id).bind(2, start).bind(3, granularity).bind(4, session)
-                        .bind(5, energy).bind(6, cpu).bind(7, cpu)
-                        .bind(8, memory).bind(9, memory)
-                        .bind(10, disk).bind(11, confidence)
+                        .bind(5, energyAvailable ? energy : 0)
+                        .bind(6, cpuAvailable ? cpu : 0)
+                        .bind(7, cpuAvailable ? cpu : 0)
+                        .bind(8, memoryAvailable ? memory : 0)
+                        .bind(9, memoryAvailable ? memory : 0)
+                        .bind(10, diskAvailable ? disk : 0)
+                        .bind(11, confidence)
+                        // Only counts toward observed duration when energy was
+                        // actually attributed to it — see the write below.
+                        .bind(12, energyAvailable ? interval : 0)
+                        .bind(13, energyAvailable ? Int64(1) : Int64(0))
+                        .bind(14, cpuAvailable ? Int64(1) : Int64(0))
+                        .bind(15, memoryAvailable ? Int64(1) : Int64(0))
+                        .bind(16, diskAvailable ? Int64(1) : Int64(0))
                         .run()
                 }
             }
@@ -197,9 +251,13 @@ public actor HistoryStore {
         public let id: String
         public let displayName: String
         public let start: Date
-        public let energyNJ: UInt64
-        public let averageCPUPercent: Double
-        public let peakMemoryBytes: UInt64
+        /// Section 3 / Appendix F: nil means Runwell could never read this app's
+        /// energy over the whole window, not that it used none. Previously an
+        /// unreadable process was summed as 0 J and reported as a confident,
+        /// silently wrong average of 0 W.
+        public let energyNJ: UInt64?
+        public let averageCPUPercent: Double?
+        public let peakMemoryBytes: UInt64?
         public let confidence: Double
         /// The application's bundle identifier, when it had one. Section 7.1 keeps
         /// paths out of the database, so this is what a caller resolves an icon
@@ -209,13 +267,15 @@ public actor HistoryStore {
         /// not the length of the window, since an app may have started partway in.
         public let observedSeconds: Double
 
-        public var energyJoules: Double { Double(energyNJ) / 1_000_000_000 }
+        public var energyJoules: Double? { energyNJ.map { Double($0) / 1_000_000_000 } }
 
         /// Average power while the app was observed. Watts are the one energy unit
         /// people already read off appliances, so this is the number the UI leads
         /// with rather than a joule total that means nothing without a duration.
-        public var averageWatts: Double {
-            guard observedSeconds > 0 else { return 0 }
+        /// Nil, not 0, when energy was never readable across the window — a caller
+        /// must not print an em dash's worth of information as a real number.
+        public var averageWatts: Double? {
+            guard let energyJoules, observedSeconds > 0 else { return nil }
             return energyJoules / observedSeconds
         }
     }
@@ -228,10 +288,14 @@ public actor HistoryStore {
         public let totalEnergyNJ: UInt64
         public let windowSeconds: Double
 
-        /// This application's portion of all measured application energy.
+        /// This application's portion of all measured application energy. An
+        /// app whose own energy was never readable across the window has no
+        /// share to report — 0 here means "excluded from the total", the same
+        /// way an app that used no measurable energy would read, which is the
+        /// correct visual (no bar) even though the underlying reason differs.
         public func share(of row: BucketRow) -> Double {
-            guard totalEnergyNJ > 0 else { return 0 }
-            return Double(row.energyNJ) / Double(totalEnergyNJ)
+            guard totalEnergyNJ > 0, let energyNJ = row.energyNJ else { return 0 }
+            return Double(energyNJ) / Double(totalEnergyNJ)
         }
     }
 
@@ -364,9 +428,22 @@ public actor HistoryStore {
         var rows: [BucketRow] = []
         try database.prepare("""
             SELECT b.app_group_id, g.display_name, MIN(b.bucket_start),
-                   SUM(b.energy_nj_sum), AVG(b.cpu_percent_sum / b.sample_count),
-                   MAX(b.memory_bytes_max), AVG(b.coverage_confidence),
-                   SUM(b.sample_count), g.bundle_id
+                   -- NULL, not a summed zero, when nothing in this window ever had
+                   -- a readable value for the metric — SUM(energy_sample_count) = 0
+                   -- means every contributing sample for this app was unreadable,
+                   -- and energy_nj_sum itself is 0 in every one of those rows too,
+                   -- so there is nothing to distinguish without the count.
+                   CASE WHEN SUM(b.energy_sample_count) > 0 THEN SUM(b.energy_nj_sum) END,
+                   -- A weighted average across buckets, not an average of averages:
+                   -- summing the numerator and denominator separately means a bucket
+                   -- built from more samples counts for more, matching what actually
+                   -- happened rather than treating a 1-sample bucket and a
+                   -- 400-sample bucket as equally representative.
+                   CASE WHEN SUM(b.cpu_sample_count) > 0
+                        THEN SUM(b.cpu_percent_sum) / SUM(b.cpu_sample_count) END,
+                   CASE WHEN SUM(b.memory_sample_count) > 0 THEN MAX(b.memory_bytes_max) END,
+                   AVG(b.coverage_confidence),
+                   SUM(b.interval_seconds_sum), g.bundle_id
             FROM bucket b
             JOIN app_group g ON g.id = b.app_group_id
             WHERE b.granularity = ? AND b.bucket_start >= ? AND b.bucket_start < ?
@@ -379,19 +456,25 @@ public actor HistoryStore {
             .bind(3, Int64(to.timeIntervalSince1970))
             .bind(4, Int64(limit))
             .query { row in
-                // Each sample covers one collection interval; the bucket tier says
-                // which. This is how long the app was actually watched.
-                let sampleCount = Double(max(0, row.int(7)))
+                // The real seconds this app was observed, summed from what each
+                // contributing sample actually covered. Previously this multiplied
+                // the sample count by 2 — the foreground interval — regardless of
+                // which sampling mode produced the samples; menu-bar (5s), battery
+                // idle (10s) and Low Power Mode (15s) samples were all undercounted
+                // by the same fixed factor, so average watts (energy / duration)
+                // came out up to 7.5x too high for anything recorded outside the
+                // foreground window.
+                let observedSeconds = max(0, row.double(7))
                 rows.append(BucketRow(
                     id: row.string(0),
                     displayName: row.string(1),
                     start: Date(timeIntervalSince1970: TimeInterval(row.int(2))),
-                    energyNJ: UInt64(max(0, row.int(3))),
-                    averageCPUPercent: row.double(4),
-                    peakMemoryBytes: UInt64(max(0, row.int(5))),
+                    energyNJ: row.isNull(3) ? nil : UInt64(max(0, row.int(3))),
+                    averageCPUPercent: row.isNull(4) ? nil : row.double(4),
+                    peakMemoryBytes: row.isNull(5) ? nil : UInt64(max(0, row.int(5))),
                     confidence: row.double(6),
                     bundleID: row.string(8),
-                    observedSeconds: sampleCount * 2
+                    observedSeconds: observedSeconds
                 ))
             }
         return rows
@@ -552,12 +635,17 @@ public actor HistoryStore {
         try database.prepare("SELECT MIN(bucket_start) FROM bucket").query { row in
             if !row.isNull(0) { earliest = Date(timeIntervalSince1970: TimeInterval(row.int(0))) }
         }
-        let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int64) ?? 0
+        // `try?` on the outer expression already collapses "file missing" and
+        // "attribute unreadable" to nil; the previous `size ?? 0` on an
+        // already-non-optional Int64 was dead code that hid the double-optional
+        // chain rather than resolving it.
+        let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int64)
+            .flatMap { $0 } ?? 0
         return Statistics(
             bucketRows: try count("bucket"),
             batterySamples: try count("battery_sample"),
             applications: try count("app_group"),
-            fileSizeBytes: size ?? 0,
+            fileSizeBytes: size,
             earliest: earliest
         )
     }

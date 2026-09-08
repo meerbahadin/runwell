@@ -32,7 +32,17 @@ fi
 echo "==> Building release binary"
 # The shipping identifier, pinned here so a local build's development identifier
 # can never reach a notarized artifact.
-BUNDLE_ID="com.runwell.Runwell" "$ROOT/Scripts/build-app.sh" release
+BUNDLE_ID="com.runwell.Runwell" UNIVERSAL=1 "$ROOT/Scripts/build-app.sh" release
+
+# Fail loudly here rather than shipping a single-arch build that only fails for the
+# people who receive it: a first release went out arm64-only because nothing
+# checked, and macOS reports that as "damaged" rather than pointing at Rosetta.
+SLICES="$(lipo -archs "$APP/Contents/MacOS/Runwell")"
+if [[ "$SLICES" != *"arm64"* || "$SLICES" != *"x86_64"* ]]; then
+  echo "error: expected a universal (arm64 + x86_64) binary, got: $SLICES" >&2
+  exit 1
+fi
+echo "==> Confirmed universal binary: $SLICES"
 
 # The hardened runtime is required for notarization. Runwell asks for no
 # exceptions: it reads public counters, so it needs no entitlement relaxations.

@@ -1,6 +1,20 @@
 import SwiftUI
 import RunwellKit
 
+/// Section 5.3's normalized display: raw macOS-style CPU percentage divided across
+/// every core, so a fully busy 12-core Mac reads 100% instead of 1200%.
+///
+/// This used to be applied inside `MetricEngine`, mutating the canonical value every
+/// other consumer read — `InsightEngine`'s fixed background-CPU threshold, grouping,
+/// sort order and `HistoryStore` all silently changed meaning depending on this
+/// display preference. It is now a pure `.map` applied only where a CPU number is
+/// about to be shown to the user, on a copy that carries the original provenance
+/// forward unchanged.
+func displayCPU(_ raw: IntervalMetric<Double>, normalize: Bool, coreCount: Int) -> IntervalMetric<Double> {
+    guard normalize, coreCount > 0 else { return raw }
+    return raw.map { $0 / Double(coreCount) }
+}
+
 /// Section 3 / 8.5. Renders a metric together with its provenance.
 ///
 /// Section 8.5 forbids encoding severity by color alone, so every state carries text

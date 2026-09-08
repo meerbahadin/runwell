@@ -67,17 +67,20 @@ struct DeltaTests {
         #expect(try #require(metrics.cpuPercent.value) > 100)
     }
 
-    @Test("Normalized mode divides by core count")
-    func normalizedCPU() throws {
-        let normalizing = MetricEngine(configuration: .init(
-            normalizeCPUToCoreCount: true,
-            logicalProcessorCount: 10
-        ))
+    @Test("The engine always produces raw CPU, never normalized")
+    func engineNeverNormalizesCPU() throws {
+        // The "normalize CPU" setting used to divide by core count inside the
+        // engine itself, silently rewriting the canonical value that
+        // InsightEngine's fixed thresholds, ApplicationGrouper, sort order and
+        // HistoryStore all read. There is now no configuration path that can
+        // produce anything but the raw macOS-style percentage from this engine —
+        // normalizing for display happens elsewhere, on a copy, never here.
         let previous = snapshot(atSeconds: 0, cpuNS: 0)
         let current = snapshot(atSeconds: 1, cpuNS: 4_000_000_000)
-        let metrics = try #require(normalizing.calculate(previous: previous, current: current, identity: testIdentity))
-        // 400% raw across 10 cores = 40% normalized.
-        #expect(abs(try #require(metrics.cpuPercent.value) - 40.0) < 0.001)
+        let metrics = try #require(engine.calculate(previous: previous, current: current, identity: testIdentity))
+        // 4 CPU-seconds of work in 1 wall second = 400%, unnormalized, regardless
+        // of how many cores this Mac has.
+        #expect(abs(try #require(metrics.cpuPercent.value) - 400.0) < 0.001)
     }
 
     @Test("Energy watts follow the Section 3.2 formula")

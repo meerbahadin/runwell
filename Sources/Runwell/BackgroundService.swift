@@ -98,15 +98,26 @@ final class BackgroundService {
         observers.append(centre.addObserver(
             forName: NSWindow.willCloseNotification, object: nil, queue: .main
         ) { [weak self] notification in
-            // A window that is closing has already resigned key and main status, so
-            // it cannot be identified that way. Instead check what remains: once the
-            // last real window goes, only panels and the menu-bar extra are left.
-            guard let closing = notification.object as? NSWindow, closing.contentView != nil else { return }
-            Task { @MainActor in
-                // Give AppKit a turn to finish removing it from the window list.
-                try? await Task.sleep(for: .milliseconds(120))
-                let remaining = NSApp.windows.filter { $0.isVisible && $0.canBecomeMain }
-                if remaining.isEmpty { self?.windowBecameHidden() }
+            // `notification` is read here, synchronously, in the outer closure —
+            // not forwarded into an isolated context — since Notification is not
+            // Sendable and strict concurrency correctly refuses to let it cross an
+            // actor boundary. `.object` alone touches nothing AppKit-isolated;
+            // only the `.contentView` read below needs the main-actor guarantee
+            // `queue: .main` provides at runtime but the closure's own @Sendable
+            // type does not statically carry.
+            guard let closing = notification.object as? NSWindow else { return }
+            MainActor.assumeIsolated {
+                // A window that is closing has already resigned key and main
+                // status, so it cannot be identified that way. Instead check what
+                // remains: once the last real window goes, only panels and the
+                // menu-bar extra are left.
+                guard closing.contentView != nil else { return }
+                Task { @MainActor in
+                    // Give AppKit a turn to finish removing it from the window list.
+                    try? await Task.sleep(for: .milliseconds(120))
+                    let remaining = NSApp.windows.filter { $0.isVisible && $0.canBecomeMain }
+                    if remaining.isEmpty { self?.windowBecameHidden() }
+                }
             }
         })
 
@@ -150,7 +161,15 @@ final class BackgroundService {
         guard let environment else { return }
 
         let mode: SamplingMode
-        if ProcessInfo.processInfo.isLowPowerModeEnabled {
+        // Section 5.1 / Settings' own promise: "Recording stops when you close the
+        // window." Previously this method never checked runsInBackground at all, so
+        // turning the toggle off only ever changed *how often* Runwell sampled —
+        // never whether it did. The window being open always overrides this: a
+        // visible window means the user is looking at live numbers right now,
+        // independent of what happens once they close it.
+        if !runsInBackground && !isWindowVisible {
+            mode = .paused
+        } else if ProcessInfo.processInfo.isLowPowerModeEnabled {
             mode = .lowPowerMode
         } else if isWindowVisible {
             mode = .foreground

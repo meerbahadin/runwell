@@ -89,6 +89,53 @@ enum Migrations {
             PRIMARY KEY (collector, os_build, hardware_model)
         );
         """),
+        (2, """
+        -- Section 7.1 / 3.2: observed duration was reconstructed at read time as
+        -- `sample_count * 2`, hardcoding the foreground cadence. Sampling modes run
+        -- from 1 to 15 seconds depending on visibility and power state, so a bucket
+        -- built from menu-bar or battery-idle samples reported a duration up to
+        -- 7.5x shorter than what was actually observed — and average watts, which
+        -- divides energy by that duration, came out just as far wrong. Recording
+        -- the real interval on write removes the assumption entirely.
+        ALTER TABLE bucket ADD COLUMN interval_seconds_sum REAL NOT NULL DEFAULT 0;
+
+        -- Existing rows predate this column and have no way to recover their true
+        -- interval, so they are backfilled with the old assumption rather than left
+        -- at 0 — a 0 duration would divide-by-zero every historical average watts
+        -- calculation for data recorded before this migration runs.
+        UPDATE bucket SET interval_seconds_sum = sample_count * 2
+        WHERE interval_seconds_sum = 0 AND sample_count > 0;
+        """),
+        (3, """
+        -- Section 3 / Appendix F: "an unavailable reading is not a low reading."
+        -- Every aggregate column here (energy, CPU, memory, disk) was written as
+        -- `value ?? 0` when a process could not be read for that cycle, then
+        -- averaged by dividing the sum by `sample_count` — the *total* number of
+        -- contributing samples, unreadable ones included. A process unreadable
+        -- half the time therefore had its true average silently cut in half
+        -- rather than computed from the half that was actually measured, and a
+        -- process unreadable *every* time reported a confident zero instead of
+        -- an unknown value. `sample_count` alone cannot distinguish these cases,
+        -- so each metric gets its own count of samples that actually contributed
+        -- a real value to it.
+        ALTER TABLE bucket ADD COLUMN energy_sample_count INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE bucket ADD COLUMN cpu_sample_count    INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE bucket ADD COLUMN memory_sample_count INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE bucket ADD COLUMN disk_sample_count   INTEGER NOT NULL DEFAULT 0;
+
+        -- Existing rows predate per-metric counts and cannot recover which
+        -- specific samples were readable. Assuming every sample was readable is
+        -- the same behaviour these rows already had before this migration — no
+        -- new average is invented, and no previously-reported number moves — so
+        -- old history keeps reading exactly as it always has rather than being
+        -- retroactively marked unavailable for a distinction it never recorded.
+        UPDATE bucket SET
+            energy_sample_count = sample_count,
+            cpu_sample_count    = sample_count,
+            memory_sample_count = sample_count,
+            disk_sample_count   = sample_count
+        WHERE energy_sample_count = 0 AND sample_count > 0;
+        """),
     ]
 
     static func apply(to database: Database) throws {

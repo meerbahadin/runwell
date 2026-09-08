@@ -74,8 +74,13 @@ public struct CapabilitySet: Sendable {
 
     public func status(_ collector: Collector) -> CapabilityStatus? { statuses[collector] }
 
-    /// Section 12.3 energy gate: GO when energy counters are nonzero, monotonic and
-    /// attributable. Otherwise the product ships an Energy Score only.
+    /// Section 12.3 energy gate: whether this Mac's energy counters read nonzero,
+    /// monotonic and attributable — `.processEnergy`'s own availability, exposed
+    /// under the name the gate is known by. No caller currently branches on this;
+    /// it previously claimed a "ships an Energy Score only" fallback existed for a
+    /// failing gate, but nothing in the app implements one — the honest behaviour
+    /// today is that `.processEnergy` reports unavailable and energy values read
+    /// as an em dash, the same as any other ungated unavailable metric.
     public var energyGatePassed: Bool { isAvailable(.processEnergy) }
 }
 
@@ -189,8 +194,10 @@ public struct CapabilityProbe: Sendable {
             return (false, "No process resource counters are readable on this system.")
         }
         guard nonzero > 0 else {
-            // The field exists but reports nothing: Energy Score fallback, per the gate.
-            return (false, "Energy counters read as zero on this hardware; showing an energy score instead.")
+            // The field exists but reports nothing on this hardware. Section 3:
+            // that is unavailable, not a low reading — energy values fall back to
+            // an em dash rather than a fabricated number.
+            return (false, "Energy counters read as zero on this hardware; energy values will show as unavailable.")
         }
         return (true, "Validated on \(nonzero) of \(readable) readable processes.")
     }
@@ -200,6 +207,10 @@ public struct CapabilityProbe: Sendable {
         guard sysctlbyname(name, nil, &size, nil, 0) == 0, size > 0 else { return nil }
         var buffer = [CChar](repeating: 0, count: size)
         guard sysctlbyname(name, &buffer, &size, nil, 0) == 0 else { return nil }
-        return String(cString: buffer)
+        // sysctlbyname null-terminates the returned string; truncate at that point
+        // before decoding rather than relying on the deprecated String(cString:),
+        // which assumes but does not verify the same thing.
+        let nulTerminatorIndex = buffer.firstIndex(of: 0) ?? buffer.endIndex
+        return String(decoding: buffer[..<nulTerminatorIndex].map { UInt8(bitPattern: $0) }, as: UTF8.self)
     }
 }
