@@ -1,0 +1,218 @@
+import SwiftUI
+import PowerTaskKit
+
+/// Section 8.1 / 8.2. The sortable grouped application list.
+struct ApplicationsView: View {
+    @Environment(AppEnvironment.self) private var environment
+    @State private var expanded: Set<ApplicationGroupID> = []
+
+    var body: some View {
+        @Bindable var environment = environment
+
+        VStack(spacing: 0) {
+            if environment.isWaitingForFirstInterval {
+                ContentUnavailableView {
+                    Label("Measuring", systemImage: "hourglass")
+                } description: {
+                    Text("Rates are calculated between two samples. The first values appear after the next collection cycle.")
+                }
+            } else {
+                table
+            }
+        }
+        .navigationTitle("Applications")
+        .searchable(text: $environment.searchText, prompt: "Search applications")
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Picker("Sort by", selection: $environment.sortOrder) {
+                    ForEach(AppEnvironment.SortColumn.allCases) { column in
+                        Text(column.rawValue).tag(column)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .help("Sort the application list")
+            }
+        }
+    }
+
+    private var table: some View {
+        ScrollView {
+            LazyVStack(spacing: 0) {
+                header
+                ForEach(environment.groups) { group in
+                    ApplicationRow(
+                        group: group,
+                        isExpanded: expanded.contains(group.id),
+                        share: environment.snapshot?.coverage.measuredAppShare(of: group),
+                        onToggle: { toggle(group) }
+                    )
+                    .background(environment.selectedGroupID == group.id ? Color.accentColor.opacity(0.12) : .clear)
+                    .contentShape(Rectangle())
+                    .onTapGesture { environment.selectedGroupID = group.id }
+                    Divider()
+                }
+            }
+        }
+        // Section 8.2: rows must not reorder while the pointer is over the table.
+        .onContinuousHover { phase in
+            switch phase {
+            case .active: environment.isPointerOverTable = true
+            case .ended: environment.isPointerOverTable = false
+            }
+        }
+    }
+
+    private var header: some View {
+        HStack(spacing: 12) {
+            Text("Application")
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Text("Energy").frame(width: 90, alignment: .trailing)
+            Text("CPU").frame(width: 70, alignment: .trailing)
+            Text("Memory").frame(width: 90, alignment: .trailing)
+            Text("Status").frame(width: 150, alignment: .leading)
+        }
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 6)
+        .background(.bar)
+    }
+
+    private func toggle(_ group: ApplicationGroup) {
+        // Section 12.2: expanding must not change the group total — the total is
+        // always derived from members, so this only affects disclosure.
+        if expanded.contains(group.id) {
+            expanded.remove(group.id)
+        } else {
+            expanded.insert(group.id)
+        }
+    }
+}
+
+/// Section 8.2. One application row, with an expandable process tree (Section 1.3:
+/// apps before processes, but always reversible).
+struct ApplicationRow: View {
+    let group: ApplicationGroup
+    let isExpanded: Bool
+    let share: IntervalMetric<Double>?
+    let onToggle: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                HStack(spacing: 6) {
+                    if group.processCount > 1 {
+                        Button(action: onToggle) {
+                            Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .frame(width: 12)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(isExpanded ? "Collapse processes" : "Expand \(group.processCount) processes")
+                    } else {
+                        Spacer().frame(width: 12)
+                    }
+
+                    AppIcon(bundleURL: group.bundleURL, size: 18)
+
+                    Text(group.displayName)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+
+                    if group.processCount > 1 {
+                        Text("\(group.processCount)")
+                            .font(.caption2)
+                            .monospacedDigit()
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(.quaternary, in: Capsule())
+                            .foregroundStyle(.secondary)
+                            .help("\(group.processCount) processes in this application")
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                MetricText(metric: group.totalEnergyWatts, format: "%.2f", suffix: " W")
+                    .frame(width: 90, alignment: .trailing)
+                MetricText(metric: group.totalCPUPercent, format: "%.1f", suffix: "%")
+                    .frame(width: 70, alignment: .trailing)
+                MemoryText(metric: group.totalFootprintBytes)
+                    .frame(width: 90, alignment: .trailing)
+
+                HStack(spacing: 4) {
+                    StatusBadge(status: group.status)
+                    Spacer(minLength: 0)
+                }
+                .frame(width: 150, alignment: .leading)
+            }
+            .font(.callout)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 5)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(accessibilityDescription)
+
+            if isExpanded {
+                ForEach(group.members, id: \.key) { member in
+                    ProcessSubRow(metrics: member)
+                }
+            }
+        }
+    }
+
+    /// Section 8.5: VoiceOver gets the full picture in one utterance, including
+    /// provenance and any unavailable reason.
+    private var accessibilityDescription: String {
+        var parts = [group.displayName]
+        if group.processCount > 1 { parts.append("\(group.processCount) processes") }
+        parts.append("Energy \(group.totalEnergyWatts.formatted("%.2f", suffix: " watts")), \(group.totalEnergyWatts.provenance.badge)")
+        parts.append("CPU \(group.totalCPUPercent.formatted("%.1f", suffix: " percent"))")
+        if let bytes = group.totalFootprintBytes.value {
+            parts.append("Memory \(ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .memory))")
+        }
+        if let label = group.status.label { parts.append(label) }
+        return parts.joined(separator: ", ")
+    }
+}
+
+/// A child process inside an expanded application group.
+struct ProcessSubRow: View {
+    let metrics: ProcessIntervalMetrics
+
+    var body: some View {
+        HStack(spacing: 12) {
+            HStack(spacing: 6) {
+                Spacer().frame(width: 30)
+                Text(metrics.identity.name)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .foregroundStyle(.secondary)
+                Text("PID \(metrics.identity.key.pid)")
+                    .font(.caption2)
+                    .monospacedDigit()
+                    .foregroundStyle(.tertiary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            MetricText(metric: metrics.energyWatts, format: "%.2f", suffix: " W")
+                .frame(width: 90, alignment: .trailing)
+            MetricText(metric: metrics.cpuPercent, format: "%.1f", suffix: "%")
+                .frame(width: 70, alignment: .trailing)
+            MemoryText(metric: metrics.physicalFootprintBytes)
+                .frame(width: 90, alignment: .trailing)
+
+            // Section 6: grouping must be explainable — this says why the process
+            // was placed in this application.
+            Text(metrics.identity.groupingReason.explanation)
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
+                .frame(width: 150, alignment: .leading)
+                .help(metrics.identity.groupingReason.explanation)
+        }
+        .font(.caption)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 3)
+        .background(.quaternary.opacity(0.25))
+    }
+}

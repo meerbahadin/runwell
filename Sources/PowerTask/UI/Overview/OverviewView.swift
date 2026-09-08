@@ -1,0 +1,181 @@
+import SwiftUI
+import PowerTaskKit
+
+/// Section 8.1. Battery state, measured app energy coverage and the top drains.
+///
+/// Section 1.4 target: a user identifies the dominant measured application-energy
+/// consumer within 10 seconds of opening the app — so that answer is the largest
+/// thing on this screen.
+struct OverviewView: View {
+    @Environment(AppEnvironment.self) private var environment
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                batterySection
+                Divider()
+                topDrainSection
+                Divider()
+                coverageSection
+            }
+            .padding(20)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .navigationTitle("Overview")
+    }
+
+    // MARK: - Battery
+
+    @ViewBuilder
+    private var batterySection: some View {
+        let battery = environment.snapshot?.battery
+
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Battery")
+                .font(.headline)
+
+            if let battery, battery.isPresent {
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    Text(battery.percentage.formatted("%.0f", suffix: "%"))
+                        .font(.system(size: 44, weight: .medium, design: .rounded))
+                        .monospacedDigit()
+                    VStack(alignment: .leading, spacing: 4) {
+                        Label(stateDescription(battery), systemImage: stateSymbol(battery))
+                            .font(.callout)
+                        Text(timeDescription(battery))
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    ProvenanceBadge(provenance: battery.percentage.provenance)
+                }
+                .accessibilityElement(children: .combine)
+            } else {
+                // Section 2.3: desktop Macs run in resource-monitor mode. That is a
+                // supported configuration, not an error.
+                Label("No battery in this Mac — running as a resource monitor.",
+                      systemImage: "desktopcomputer")
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func stateDescription(_ battery: BatterySnapshot) -> String {
+        if battery.isCharged { return "Charged" }
+        if battery.isCharging { return "Charging" }
+        return battery.powerSource == .wallPower ? "On power adapter" : "On battery"
+    }
+
+    private func stateSymbol(_ battery: BatterySnapshot) -> String {
+        if battery.isCharged { return "battery.100.bolt" }
+        if battery.isCharging { return "battery.50.bolt" }
+        return battery.powerSource == .wallPower ? "powerplug" : "battery.75"
+    }
+
+    private func timeDescription(_ battery: BatterySnapshot) -> String {
+        guard let seconds = battery.timeRemaining.value else {
+            // Never invent an estimate the OS did not give us (Section 3).
+            if battery.isCharged { return "Fully charged" }
+            // macOS itself withholds an estimate for the first few minutes after a
+            // power-source change. Section 3: say who is unable to answer and why,
+            // rather than implying PowerTask is calculating something.
+            return battery.powerSource == .wallPower ? "—" : "macOS has not estimated a time yet"
+        }
+        let hours = Int(seconds) / 3600
+        let minutes = (Int(seconds) % 3600) / 60
+        let time = hours > 0 ? "\(hours)h \(minutes)m" : "\(minutes)m"
+        return battery.isCharging ? "\(time) until full" : "\(time) remaining"
+    }
+
+    // MARK: - Top drain
+
+    @ViewBuilder
+    private var topDrainSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Using the most energy")
+                .font(.headline)
+
+            if environment.isWaitingForFirstInterval {
+                // Section 3: a rate needs two samples. Say so rather than showing zeros.
+                Label("Measuring… energy needs two samples.", systemImage: "hourglass")
+                    .foregroundStyle(.secondary)
+            } else if let top = environment.topEnergyGroup {
+                HStack(spacing: 12) {
+                    AppIcon(bundleURL: top.bundleURL, size: 40)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(top.displayName)
+                            .font(.title3.weight(.medium))
+                        HStack(spacing: 6) {
+                            MetricText(metric: top.totalEnergyWatts, format: "%.2f", suffix: " W")
+                                .font(.callout)
+                            ProvenanceBadge(provenance: top.totalEnergyWatts.provenance, compact: true)
+                            if top.processCount > 1 {
+                                Text("· \(top.processCount) processes")
+                                    .font(.callout)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        if let share = environment.snapshot?.coverage.measuredAppShare(of: top).value {
+                            // Section 3.1 mandates this wording, not "battery used".
+                            Text("\(EnergyCoverage.shareLabel): \(String(format: "%.0f%%", share * 100))")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    Spacer()
+                    StatusBadge(status: top.status)
+                }
+                .padding(12)
+                .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 10))
+            } else {
+                Label("No application is using measurable energy right now.",
+                      systemImage: "leaf")
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    // MARK: - Coverage
+
+    @ViewBuilder
+    private var coverageSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Measurement coverage")
+                .font(.headline)
+
+            // Section 3.1: the display, radios, DRAM and kernel work are not
+            // attributable to any app, so this must never be presented as a full
+            // account of battery discharge.
+            Text("PowerTask can measure energy for the processes it is allowed to read. The display, radios and system services are not included, so these shares describe applications only — not your whole battery.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if let snapshot = environment.snapshot {
+                let readable = snapshot.groups.reduce(0) { $0 + $1.processCount }
+                let unreadable = snapshot.coverage.inaccessibleProcessCount
+                Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 6) {
+                    GridRow {
+                        Text("Processes measured").foregroundStyle(.secondary)
+                        Text("\(readable)").monospacedDigit()
+                    }
+                    GridRow {
+                        Text("Not readable").foregroundStyle(.secondary)
+                        HStack(spacing: 6) {
+                            Text("\(unreadable)").monospacedDigit()
+                            Text("system or other users")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    GridRow {
+                        Text("Sampling").foregroundStyle(.secondary)
+                        Text(snapshot.mode.description)
+                    }
+                }
+                .font(.callout)
+            }
+        }
+    }
+
+}
