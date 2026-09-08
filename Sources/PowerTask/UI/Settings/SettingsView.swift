@@ -20,6 +20,8 @@ struct SettingsView: View {
                 Divider()
                 historySection(environment: environment)
                 Divider()
+                alerts(environment: environment)
+                Divider()
                 privacy
             }
             .padding(20)
@@ -161,6 +163,23 @@ struct SettingsView: View {
 
             Button("Delete All History…", role: .destructive) { confirmingClear = true }
                 .disabled(environment.history == nil)
+        }
+    }
+
+    // MARK: - Alerts
+
+    private func alerts(environment: AppEnvironment) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Alerts").font(.headline)
+            Toggle("Notify me about sustained high energy use", isOn: Binding(
+                get: { environment.areNotificationsEnabled },
+                set: { environment.areNotificationsEnabled = $0 }
+            ))
+            // Section 8.3: rules need a condition to hold, so alerts do not fire on
+            // a momentary spike.
+            Text("PowerTask only alerts when a condition lasts — at least a minute of high energy, or two minutes of background activity.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 

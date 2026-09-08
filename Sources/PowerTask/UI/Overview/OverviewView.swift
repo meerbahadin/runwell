@@ -12,6 +12,7 @@ struct OverviewView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
+                insightsSection
                 batterySection
                 Divider()
                 topDrainSection
@@ -22,6 +23,42 @@ struct OverviewView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .navigationTitle("Overview")
+    }
+
+    // MARK: - Insights
+
+    /// Section 8.3. The explanation sits above the numbers: a user who opens the app
+    /// because something feels wrong should read the answer before the evidence.
+    @ViewBuilder
+    private var insightsSection: some View {
+        if !environment.insights.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(environment.insights) { insight in
+                    HStack(alignment: .top, spacing: 10) {
+                        // Section 8.5: an icon and text, never colour alone.
+                        Image(systemName: insight.rule.symbolName)
+                            .foregroundStyle(insight.severity == .warning ? .orange : .secondary)
+                            .frame(width: 18)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(insight.message)
+                            Text(insight.evidence)
+                                .font(.caption).foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Spacer()
+                        // Section 8.4 "Ignore alerts".
+                        Button("Ignore") { environment.mute(insight) }
+                            .buttonStyle(.plain)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .help("Stops this alert for this app. Measurement continues.")
+                    }
+                    .padding(12)
+                    .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10))
+                }
+            }
+            Divider()
+        }
     }
 
     // MARK: - Battery

@@ -129,6 +129,18 @@ struct MenuBarContent: View {
                 }
             }
 
+            // Section 8.3: if something is worth saying, the menu bar says it first.
+            if let insight = environment.insights.first {
+                Divider()
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: insight.rule.symbolName)
+                        .foregroundStyle(insight.severity == .warning ? .orange : .secondary)
+                    Text(insight.message)
+                        .font(.callout)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
             Divider()
             Text("Top energy users").font(.caption).foregroundStyle(.secondary)
 

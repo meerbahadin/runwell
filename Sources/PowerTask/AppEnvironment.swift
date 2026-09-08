@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import PowerTaskKit
 import Observation
 
@@ -36,6 +37,22 @@ final class AppEnvironment {
     /// Set once the scene exists; owns background cadence and login-item state.
     var background: BackgroundService?
 
+    // MARK: - Insights
+
+    private let insightEngine: InsightEngine
+    private var insightState = InsightEngine.State()
+    private(set) var insights: [Insight] = []
+
+    /// Section 8.4 "Ignore alerts": muting stops the alert, never the measurement.
+    func mute(_ insight: Insight) {
+        insightState.mute(insight)
+        insights = insightState.activeInsights
+    }
+
+    var areNotificationsEnabled = UserDefaults.standard.object(forKey: "notifications") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(areNotificationsEnabled, forKey: "notifications") }
+    }
+
     // MARK: - History
 
     private(set) var history: HistoryStore?
@@ -63,6 +80,8 @@ final class AppEnvironment {
         let capabilities = CapabilityProbe().probe()
         self.capabilities = capabilities
         self.sampler = SamplerService(capabilities: capabilities)
+        // Section 8.3: thresholds are calibrated to this Mac rather than fixed.
+        self.insightEngine = InsightEngine(thresholds: .calibrated(for: capabilities))
         if isHistoryEnabled { openHistory() }
     }
 
@@ -108,12 +127,38 @@ final class AppEnvironment {
 
     private func apply(_ snapshot: SamplerSnapshot) {
         self.snapshot = snapshot
+        evaluateInsights(snapshot)
         // Section 7.2: persistence happens off the main actor, so the UI is never
         // waiting on a disk write.
         if let history {
             Task.detached(priority: .utility) {
                 do { try await history.record(snapshot) }
                 catch { await MainActor.run { self.historyError = error.localizedDescription } }
+            }
+        }
+    }
+
+    /// Section 4.2: insight rules are evaluated after each cycle's view model is
+    /// published, and alerts fire only on the transition into a condition.
+    private func evaluateInsights(_ snapshot: SamplerSnapshot) {
+        // An app the user is looking at is not "background activity", so the rule
+        // needs to know which groups are frontmost right now.
+        let frontmost = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        var foreground: Set<ApplicationGroupID> = []
+        if let frontmost {
+            for group in snapshot.groups where group.members.contains(where: { $0.key.pid == frontmost }) {
+                foreground.insert(group.id)
+            }
+        }
+
+        let newlyRaised = insightEngine.evaluate(
+            snapshot: snapshot, foregroundGroupIDs: foreground, state: &insightState
+        )
+        insights = insightState.activeInsights
+
+        if areNotificationsEnabled {
+            for insight in newlyRaised {
+                NotificationService.shared.post(insight)
             }
         }
     }

@@ -57,6 +57,11 @@ public struct ApplicationGroup: Sendable, Identifiable {
         members.reduce(UInt64(0)) { $0 &+ ($1.energyDeltaNJ ?? 0) }
     }
 
+    /// Section 8.3 wakeup storm evidence.
+    public var totalWakeupsPerSecond: IntervalMetric<Double> {
+        Self.sum(members.map(\.wakeupsPerSecond))
+    }
+
     /// Summing partially-available values needs an explicit rule. If nothing in the
     /// group could be read the sum is unavailable — not zero (Appendix F). If only
     /// some members were readable the sum is real but under-counted, so confidence
