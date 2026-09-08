@@ -2,15 +2,15 @@
 import PackageDescription
 
 let package = Package(
-    name: "PowerTask",
+    name: "Runwell",
     platforms: [.macOS(.v15)],
     products: [
-        .library(name: "PowerTaskKit", targets: ["PowerTaskKit"]),
-        .executable(name: "PowerTask", targets: ["PowerTask"]),
+        .library(name: "RunwellKit", targets: ["RunwellKit"]),
+        .executable(name: "Runwell", targets: ["Runwell"]),
     ],
     targets: [
         .target(
-            name: "PowerTaskKit",
+            name: "RunwellKit",
             swiftSettings: [.swiftLanguageMode(.v6)],
             // Section 2.3: SQLite is preferred for explicit retention and batch
             // writes. Linking the system library rather than vendoring GRDB keeps
@@ -18,13 +18,13 @@ let package = Package(
             linkerSettings: [.linkedLibrary("sqlite3")]
         ),
         .executableTarget(
-            name: "PowerTask",
-            dependencies: ["PowerTaskKit"],
+            name: "Runwell",
+            dependencies: ["RunwellKit"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .testTarget(
-            name: "PowerTaskKitTests",
-            dependencies: ["PowerTaskKit"],
+            name: "RunwellKitTests",
+            dependencies: ["RunwellKit"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
     ]

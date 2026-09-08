@@ -1,5 +1,5 @@
 import SwiftUI
-import PowerTaskKit
+import RunwellKit
 
 /// Section 8.1 / 8.2. The sortable grouped application list.
 struct ApplicationsView: View {
@@ -121,14 +121,22 @@ struct ApplicationRow: View {
                         .truncationMode(.middle)
 
                     if group.processCount > 1 {
-                        Text("\(group.processCount)")
-                            .font(.caption2)
+                        // A bare number in a capsule read as a mystery: it needed a
+                        // hover to say what it counted. The unit is now on the badge.
+                        Text("\(group.processCount) processes")
+                            .font(.caption)
                             .monospacedDigit()
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 1)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
                             .background(.quaternary, in: Capsule())
                             .foregroundStyle(.secondary)
-                            .help("\(group.processCount) processes in this application")
+                            // `.help` on the Text alone tracks only the glyph
+                            // bounds, so the capsule's padding was dead space and
+                            // the tooltip mostly refused to appear. contentShape
+                            // makes the whole capsule the hover target.
+                            .contentShape(Capsule())
+                            .help("This application is running \(group.processCount) processes. Expand the row to see them.")
+                            .accessibilityLabel("\(group.processCount) processes")
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)

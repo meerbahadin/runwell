@@ -12,7 +12,7 @@ public struct ProtectedProcessPolicy: Sendable {
         case unprotected
         /// Terminable, but only behind an explicit confirmation.
         case requiresConfirmation(String)
-        /// Never terminable from PowerTask.
+        /// Never terminable from Runwell.
         case blocked(String)
 
         public var isBlocked: Bool {
@@ -36,14 +36,14 @@ public struct ProtectedProcessPolicy: Sendable {
             return .blocked("\(name) is a critical macOS process. Quitting it would make your Mac unusable.")
         }
 
-        // PowerTask must not offer to kill PowerTask.
+        // Runwell must not offer to kill Runwell.
         if identity.key.pid == getpid() {
-            return .blocked("This is PowerTask itself.")
+            return .blocked("This is Runwell itself.")
         }
 
         // Section 2.2 / 8.4: block or strongly warn for system and root processes.
         if identity.userID == 0 {
-            return .blocked("This process runs as root. PowerTask does not terminate system-owned processes.")
+            return .blocked("This process runs as root. Runwell does not terminate system-owned processes.")
         }
 
         if identity.userID != getuid() {

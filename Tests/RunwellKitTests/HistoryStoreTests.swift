@@ -1,6 +1,6 @@
 import Testing
 import Foundation
-@testable import PowerTaskKit
+@testable import RunwellKit
 
 /// Section 7 and the Section 12.2 acceptance criterion: "History survives relaunch,
 /// respects retention and does not bridge invalid deltas across session boundaries."

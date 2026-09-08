@@ -1,6 +1,6 @@
 import Testing
 import Foundation
-@testable import PowerTaskKit
+@testable import RunwellKit
 
 /// Section 8.3 rules and Section 11.1: the sustained-window logic is the part that
 /// must not misfire, since an alert that cries wolf is worse than none.
@@ -173,7 +173,62 @@ struct InsightEngineTests {
                                      now: now.addingTimeInterval(61))
         let insight = raised.first { $0.rule == .sustainedEnergy }
         #expect(insight?.evidence.contains("W") == true)
-        #expect(insight?.message == "Chrome has used high measured energy for the last minute.")
+        #expect(insight?.message == "Chrome is using a lot of power.")
+    }
+
+    /// The field report: Chrome drew 18 W with no notification, because low-priority
+    /// wakeup notices had already consumed the spacing window. The engine must still
+    /// raise the energy warning — suppression is the notifier's decision, not the
+    /// engine's, and the warning has to exist for the notifier to prefer it.
+    @Test("A high-energy warning is raised alongside lower-priority notices")
+    func energyWarningSurvivesAlongsideNotices() {
+        let engine = InsightEngine(thresholds: .init(sustainedEnergyWatts: 2.5))
+        var state = InsightEngine.State()
+        let now = Date()
+        // Chrome well over the energy threshold, plus noisy wakeup neighbours.
+        let busy = snapshot([
+            group(name: "Chrome", watts: 18, wakeups: 1834),
+            group(name: "Telegram", watts: 0, wakeups: 240),
+            group(name: "Code", watts: 0, wakeups: 411),
+        ])
+
+        _ = engine.evaluate(snapshot: busy, foregroundGroupIDs: [], state: &state, now: now)
+        let raised = engine.evaluate(snapshot: busy, foregroundGroupIDs: [], state: &state,
+                                     now: now.addingTimeInterval(120))
+
+        let energy = raised.first { $0.rule == .sustainedEnergy && $0.appName == "Chrome" }
+        #expect(energy != nil)
+        // Severity is what lets the notifier preempt a spacing window for this.
+        #expect(energy?.severity == .warning)
+        // Chrome is hot on both counts, but gets one row: the measured power reading
+        // outranks the wakeup proxy, so the user is not told twice about one app.
+        #expect(!raised.contains { $0.rule == .wakeupStorm && $0.appName == "Chrome" })
+        #expect(raised.filter { $0.appName == "Chrome" }.count == 1)
+        // Apps that are only noisy still get their own row.
+        #expect(raised.contains { $0.rule == .wakeupStorm && $0.appName == "Telegram" })
+    }
+
+    /// The overview showed Chrome twice — once for wakeups, once for power — which
+    /// is one app's story told two ways. One app, one row.
+    @Test("An app that trips several rules is listed once")
+    func oneRowPerApp() {
+        let engine = InsightEngine(thresholds: .init(sustainedEnergyWatts: 2.5),
+                                   pressureSource: { .measured(.warning) })
+        var state = InsightEngine.State()
+        let now = Date()
+        // Hot on energy, wakeups and memory at the same time.
+        let busy = snapshot([
+            group(name: "Chrome", watts: 18, cpu: 90,
+                  memoryBytes: 4 * 1024 * 1024 * 1024, wakeups: 1834),
+        ])
+
+        _ = engine.evaluate(snapshot: busy, foregroundGroupIDs: [], state: &state, now: now)
+        _ = engine.evaluate(snapshot: busy, foregroundGroupIDs: [], state: &state,
+                            now: now.addingTimeInterval(180))
+
+        #expect(state.activeInsights.count == 1)
+        // Measured power is the most direct statement of cost, so it is the one shown.
+        #expect(state.activeInsights.first?.rule == .sustainedEnergy)
     }
 
     @Test("A heavy workload raises many insights at once")
@@ -206,4 +261,122 @@ struct InsightEngineTests {
         // Section 8.3: a device-calibrated threshold, not one constant for all Macs.
         #expect(large.sustainedEnergyWatts > small.sustainedEnergyWatts)
     }
+
+    // MARK: - Section 8.3 memory rule
+
+    /// The gate is the kernel's verdict, so tests drive it directly rather than
+    /// trying to put the host machine under real memory pressure.
+    private func engine(pressure: IntervalMetric<MemoryPressureLevel>) -> InsightEngine {
+        InsightEngine(thresholds: .init(), pressureSource: { pressure })
+    }
+
+    /// A busy-but-healthy Mac: plenty of large apps, no pressure. This is the case
+    /// the footprint-sum gate could never express — a rank always selects someone,
+    /// so the rule named the top decile of a perfectly fine system.
+    private var busyButHealthy: [ApplicationGroup] {
+        var groups = [
+            group(name: "Teams", watts: 0, memoryBytes: 1_600 * 1_048_576),
+            group(name: "Claude", watts: 0, memoryBytes: 583 * 1_048_576),
+            group(name: "Maccy", watts: 0, memoryBytes: 152 * 1_048_576),
+            group(name: "Finder", watts: 0, memoryBytes: 133 * 1_048_576),
+            group(name: "loginwindow", watts: 0, memoryBytes: 51 * 1_048_576),
+        ]
+        for i in 0..<40 {
+            groups.append(group(name: "helper\(i)", watts: 0, memoryBytes: 20 * 1_048_576))
+        }
+        return groups
+    }
+
+    @Test("A healthy system raises no memory insight, however large the apps")
+    func normalPressureRaisesNothing() {
+        let engine = engine(pressure: .measured(.normal))
+        var state = InsightEngine.State()
+        let now = Date()
+        let busy = snapshot(busyButHealthy)
+
+        _ = engine.evaluate(snapshot: busy, foregroundGroupIDs: [], state: &state, now: now)
+        // Well past the rule's 60-second window: duration is not what is holding it back.
+        let raised = engine.evaluate(
+            snapshot: busy, foregroundGroupIDs: [], state: &state, now: now.addingTimeInterval(120))
+
+        #expect(raised.allSatisfy { $0.rule != .memoryPressure })
+        #expect(state.activeInsights.allSatisfy { $0.rule != .memoryPressure })
+    }
+
+    @Test("Under real pressure the largest app is named")
+    func pressureNamesTheLargestApp() {
+        let engine = engine(pressure: .measured(.warning))
+        var state = InsightEngine.State()
+        let now = Date()
+        let busy = snapshot(busyButHealthy)
+
+        _ = engine.evaluate(snapshot: busy, foregroundGroupIDs: [], state: &state, now: now)
+        let raised = engine.evaluate(
+            snapshot: busy, foregroundGroupIDs: [], state: &state, now: now.addingTimeInterval(120))
+
+        let memory = raised.filter { $0.rule == .memoryPressure }
+        #expect(memory.count == 1)
+        #expect(memory.first?.appName == "Teams")
+        #expect(memory.first?.evidence.contains("elevated") == true)
+    }
+
+    /// The bug from the field: a 51 MB process called "a major contributor to memory
+    /// pressure" purely for placing in the top decile of a long process list.
+    @Test("A small app is never named, even in the top decile under pressure")
+    func smallAppIsNotBlamed() {
+        let engine = engine(pressure: .measured(.critical))
+        var state = InsightEngine.State()
+        let now = Date()
+        // Everything is small: the top decile exists, but nothing here is a cause.
+        let small = snapshot((0..<40).map {
+            group(name: "small\($0)", watts: 0, memoryBytes: UInt64(60 - $0) * 1_048_576)
+        })
+
+        _ = engine.evaluate(snapshot: small, foregroundGroupIDs: [], state: &state, now: now)
+        let raised = engine.evaluate(
+            snapshot: small, foregroundGroupIDs: [], state: &state, now: now.addingTimeInterval(120))
+
+        #expect(raised.allSatisfy { $0.rule != .memoryPressure })
+    }
+
+    @Test("An unreadable pressure level raises nothing rather than assuming")
+    func unavailablePressureRaisesNothing() {
+        let engine = engine(pressure: .unavailable(.notSupportedOnThisOS))
+        var state = InsightEngine.State()
+        let now = Date()
+        let busy = snapshot(busyButHealthy)
+
+        _ = engine.evaluate(snapshot: busy, foregroundGroupIDs: [], state: &state, now: now)
+        let raised = engine.evaluate(
+            snapshot: busy, foregroundGroupIDs: [], state: &state, now: now.addingTimeInterval(120))
+
+        #expect(raised.allSatisfy { $0.rule != .memoryPressure })
+    }
+
+    @Test("Pressure returning to normal withdraws the insight")
+    func pressureLapseWithdrawsInsight() {
+        var level: IntervalMetric<MemoryPressureLevel> = .measured(.warning)
+        let box = LevelBox(level)
+        let engine = InsightEngine(thresholds: .init(), pressureSource: { box.value })
+        var state = InsightEngine.State()
+        let now = Date()
+        let busy = snapshot(busyButHealthy)
+
+        _ = engine.evaluate(snapshot: busy, foregroundGroupIDs: [], state: &state, now: now)
+        _ = engine.evaluate(
+            snapshot: busy, foregroundGroupIDs: [], state: &state, now: now.addingTimeInterval(120))
+        #expect(state.activeInsights.contains { $0.rule == .memoryPressure })
+
+        level = .measured(.normal)
+        box.value = level
+        _ = engine.evaluate(
+            snapshot: busy, foregroundGroupIDs: [], state: &state, now: now.addingTimeInterval(180))
+        #expect(state.activeInsights.allSatisfy { $0.rule != .memoryPressure })
+    }
+}
+
+/// Lets a test flip the pressure level between cycles.
+private final class LevelBox: @unchecked Sendable {
+    var value: IntervalMetric<MemoryPressureLevel>
+    init(_ value: IntervalMetric<MemoryPressureLevel>) { self.value = value }
 }

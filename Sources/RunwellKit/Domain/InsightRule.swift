@@ -25,29 +25,32 @@ public enum InsightRule: String, Sendable, CaseIterable, Codable {
         }
     }
 
-    /// Section 8.3's user wording, with the app name substituted.
+    /// Section 8.3's user wording, with the app name substituted. Each message names the *consequence* the reader
+    /// cares about — battery, responsiveness — rather than the mechanism that was
+    /// measured. "Waking the processor" is the reading; "draining the battery" is
+    /// what it means, and the mechanism belongs in the evidence line beneath.
     public func message(for app: String) -> String {
         switch self {
         case .sustainedEnergy:
-            "\(app) has used high measured energy for the last minute."
+            "\(app) is using a lot of power."
         case .hiddenBackgroundLoad:
-            "\(app) is consuming energy while in the background."
+            "\(app) is using power in the background."
         case .memoryPressure:
-            "\(app) is a major contributor to current memory pressure."
+            "\(app) is using a lot of memory and slowing your Mac down."
         case .wakeupStorm:
-            "\(app) is waking the processor unusually often."
+            "\(app) is draining the battery even when it looks idle."
         case .sleepPrevention:
-            "\(app) is preventing your Mac from sleeping."
+            "\(app) is keeping your Mac awake."
         }
     }
 
     public var title: String {
         switch self {
-        case .sustainedEnergy: "High energy use"
-        case .hiddenBackgroundLoad: "Background activity"
-        case .memoryPressure: "Memory pressure"
-        case .wakeupStorm: "Frequent wakeups"
-        case .sleepPrevention: "Preventing sleep"
+        case .sustainedEnergy: "Heavy battery use"
+        case .hiddenBackgroundLoad: "Draining in the background"
+        case .memoryPressure: "Using a lot of memory"
+        case .wakeupStorm: "Hidden battery drain"
+        case .sleepPrevention: "Keeping your Mac awake"
         }
     }
 
@@ -63,6 +66,19 @@ public enum InsightRule: String, Sendable, CaseIterable, Codable {
 
     /// Section 5.9: this rule is specified but cannot yet be evidenced honestly.
     public var isAvailable: Bool { self != .sleepPrevention }
+
+    /// Which story about an app is worth telling when several rules fire at once.
+    /// One app must produce one row: measured power is the most direct statement of
+    /// battery cost, so it outranks the proxies that merely predict it.
+    public var priority: Int {
+        switch self {
+        case .sustainedEnergy: 4
+        case .hiddenBackgroundLoad: 3
+        case .memoryPressure: 2
+        case .wakeupStorm: 1
+        case .sleepPrevention: 0
+        }
+    }
 }
 
 public enum InsightSeverity: String, Sendable, Codable {

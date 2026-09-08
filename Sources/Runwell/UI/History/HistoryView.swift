@@ -1,6 +1,6 @@
 import SwiftUI
 import Charts
-import PowerTaskKit
+import RunwellKit
 
 /// Section 8.1. Battery level, process energy and memory over time, with session
 /// markers — the surface that answers "what drained my battery earlier?", which the
@@ -13,6 +13,14 @@ struct HistoryView: View {
     @State private var breakdown: HistoryStore.EnergyBreakdown?
     @State private var sessions: [HistoryStore.BatterySession] = []
     @State private var isLoading = true
+
+    /// One plotted battery reading. A named type rather than a tuple: the chart
+    /// builder could not type-check the tuple form in reasonable time.
+    struct ChartPoint {
+        let time: Date
+        let percentage: Double
+        let onBattery: Bool
+    }
 
     enum Range: String, CaseIterable, Identifiable {
         case oneHour = "1 hour"
@@ -44,28 +52,21 @@ struct HistoryView: View {
                 } else if battery.isEmpty && (breakdown?.rows.isEmpty ?? true) {
                     noDataYet
                 } else {
+                    // The headline is the answer; everything below is the evidence
+                    // for it, so it leads and the range that scopes it sits with it
+                    // rather than in a toolbar the eye never connects to the text.
                     headline
-                    Divider()
+                    rangePicker
                     batteryChart
-                    Divider()
                     consumersSection
-                    Divider()
                     sessionsSection
                     footnote
                 }
             }
-            .padding(20)
+            .padding(Theme.Spacing.section)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .navigationTitle("History")
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Picker("Range", selection: $range) {
-                    ForEach(Range.allCases) { Text($0.rawValue).tag($0) }
-                }
-                .pickerStyle(.segmented)
-            }
-        }
         .task(id: range) { await load() }
         // Refresh as new samples land, without hammering the database every cycle.
         .task(id: range) {
@@ -87,6 +88,20 @@ struct HistoryView: View {
         isLoading = false
     }
 
+    // MARK: - Range
+
+    /// Sits under the headline rather than in the toolbar: it scopes every number on
+    /// the page, and a control that far from its effect reads as window chrome.
+    private var rangePicker: some View {
+        Picker("Range", selection: $range) {
+            ForEach(Range.allCases) { Text($0.rawValue).tag($0) }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .fixedSize()
+        .accessibilityLabel("Time range")
+    }
+
     // MARK: - Empty states
 
     private var historyDisabled: some View {
@@ -101,7 +116,7 @@ struct HistoryView: View {
         ContentUnavailableView {
             Label("No history yet", systemImage: "clock")
         } description: {
-            Text("PowerTask records a sample every cycle while it is running. Come back in a few minutes.")
+            Text("Runwell records a sample every cycle while it is running. Come back in a few minutes.")
         }
     }
 
@@ -112,7 +127,7 @@ struct HistoryView: View {
     @ViewBuilder
     private var headline: some View {
         let drop = batteryDrop
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: Theme.Spacing.tight + 2) {
             if let top = breakdown?.rows.first, let share = breakdown?.share(of: top), share > 0 {
                 Text(headlineText(top: top, share: share, drop: drop))
                     .font(.title3)
@@ -125,6 +140,7 @@ struct HistoryView: View {
                     .font(.title3)
             }
         }
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     private func headlineText(top: HistoryStore.BucketRow, share: Double, drop: Double?) -> String {
@@ -148,9 +164,9 @@ struct HistoryView: View {
 
     @ViewBuilder
     private var batteryChart: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: Theme.Spacing.row + 2) {
             HStack(alignment: .firstTextBaseline) {
-                Text("Battery level").font(.headline)
+                Text("Battery level").font(.title3.weight(.semibold))
                 Spacer()
                 if let drop = batteryDrop, drop > 0 {
                     Text("Down \(Int(drop))%")
@@ -158,43 +174,142 @@ struct HistoryView: View {
                 }
             }
 
-            let points = battery.compactMap { point -> (Date, Double, Bool)? in
+            let points = smoothed(battery.compactMap { point -> ChartPoint? in
                 guard let percentage = point.percentage else { return nil }
-                return (point.timestamp, percentage, point.onBattery)
-            }
+                return ChartPoint(time: point.timestamp, percentage: percentage,
+                                  onBattery: point.onBattery)
+            })
 
             if points.isEmpty {
                 Text("No battery readings in this range.")
                     .foregroundStyle(.secondary)
             } else {
                 Chart {
-                    ForEach(Array(points.enumerated()), id: \.offset) { _, point in
-                        AreaMark(x: .value("Time", point.0), y: .value("Charge", point.1))
-                            .foregroundStyle(.blue.opacity(0.15))
-                        LineMark(x: .value("Time", point.0), y: .value("Charge", point.1))
-                            .foregroundStyle(.blue)
-                    }
+                    chargingBands(points)
+                    batteryCurve(points)
                 }
                 .chartYScale(domain: 0...100)
-                .chartYAxis { AxisMarks(values: [0, 25, 50, 75, 100]) }
-                .frame(height: 160)
+                .chartYAxis {
+                    AxisMarks(values: [0, 25, 50, 75, 100]) { value in
+                        AxisGridLine().foregroundStyle(.quaternary)
+                        AxisValueLabel {
+                            if let percent = value.as(Int.self) { Text("\(percent)%") }
+                        }
+                    }
+                }
+                .chartXAxis { AxisMarks(preset: .aligned) }
+                .frame(height: 170)
                 // Section 8.5: charts expose a textual alternative.
-                .accessibilityLabel(batteryAccessibilitySummary(points))
+                // The spoken summary reports what the system actually reported,
+                // not the smoothed curve drawn above it.
+                .accessibilityLabel(batteryAccessibilitySummary(rawChartPoints))
             }
         }
     }
 
-    private func batteryAccessibilitySummary(_ points: [(Date, Double, Bool)]) -> String {
+    /// Charging stretches, shaded behind the line: a rise in the curve otherwise
+    /// looks like the battery gaining charge for no reason.
+    @ChartContentBuilder
+    private func chargingBands(_ points: [ChartPoint]) -> some ChartContent {
+        ForEach(chargingSpans(points), id: \.start) { span in
+            RectangleMark(
+                xStart: .value("From", span.start),
+                xEnd: .value("To", span.end),
+                yStart: .value("Low", 0),
+                yEnd: .value("High", 100)
+            )
+            .foregroundStyle(.green.opacity(0.10))
+        }
+    }
+
+    @ChartContentBuilder
+    private func batteryCurve(_ points: [ChartPoint]) -> some ChartContent {
+        ForEach(points, id: \.time) { point in
+            AreaMark(x: .value("Time", point.time), y: .value("Charge", point.percentage))
+                .foregroundStyle(
+                    .linearGradient(
+                        colors: [.blue.opacity(0.28), .blue.opacity(0.02)],
+                        startPoint: .top, endPoint: .bottom
+                    )
+                )
+                .interpolationMethod(.monotone)
+            LineMark(x: .value("Time", point.time), y: .value("Charge", point.percentage))
+                .foregroundStyle(.blue)
+                .lineStyle(.init(lineWidth: 2, lineCap: .round))
+                .interpolationMethod(.monotone)
+        }
+    }
+
+    /// The unsmoothed readings, for anything that states a number rather than
+    /// drawing one.
+    private var rawChartPoints: [ChartPoint] {
+        battery.compactMap { point in
+            guard let percentage = point.percentage else { return nil }
+            return ChartPoint(time: point.timestamp, percentage: percentage,
+                              onBattery: point.onBattery)
+        }
+    }
+
+    /// macOS reports charge as whole integers, so the raw series is a staircase:
+    /// dozens of identical readings, then a 1% step. Interpolation cannot smooth
+    /// that — the flat runs are real — so the curve is averaged over a short
+    /// trailing window instead.
+    ///
+    /// This is a presentational smoothing of a measured value, so it stays here in
+    /// the view rather than in the collector: the stored history keeps the integers
+    /// the system actually reported (Section 3).
+    private func smoothed(_ points: [ChartPoint]) -> [ChartPoint] {
+        // Enough of a window to cross a step, small enough not to lag a real drop.
+        let window = max(3, min(15, points.count / 20))
+        guard points.count > window * 2 else { return points }
+
+        return points.indices.map { index in
+            let lower = max(0, index - window / 2)
+            let upper = min(points.count - 1, index + window / 2)
+            let slice = points[lower...upper]
+            let mean = slice.reduce(0.0) { $0 + $1.percentage } / Double(slice.count)
+            return ChartPoint(time: points[index].time, percentage: mean,
+                              onBattery: points[index].onBattery)
+        }
+    }
+
+    /// Contiguous runs where the Mac was plugged in, collapsed from per-sample flags
+    /// so the chart draws one band per stretch rather than one per reading.
+    private func chargingSpans(_ points: [ChartPoint]) -> [(start: Date, end: Date)] {
+        var spans: [(start: Date, end: Date)] = []
+        var runStart: Date?
+        var previous: Date?
+        for point in points {
+            if !point.onBattery {
+                if runStart == nil { runStart = point.time }
+                previous = point.time
+            } else if let start = runStart, let end = previous {
+                spans.append((start, end))
+                runStart = nil
+                previous = nil
+            }
+        }
+        if let start = runStart, let end = previous { spans.append((start, end)) }
+        // A single isolated sample has no width to draw.
+        return spans.filter { $0.end > $0.start }
+    }
+
+    private func batteryAccessibilitySummary(_ points: [ChartPoint]) -> String {
         guard let first = points.first, let last = points.last else { return "No data" }
-        return "Battery went from \(Int(first.1))% to \(Int(last.1))% over \(range.rawValue)."
+        let charging = chargingSpans(points).count
+        let plugged = charging > 0
+            ? " Plugged in for \(charging) \(charging == 1 ? "period" : "periods")."
+            : ""
+        return "Battery went from \(Int(first.percentage))% to "
+            + "\(Int(last.percentage))% over \(range.rawValue).\(plugged)"
     }
 
     // MARK: - Sessions
 
     @ViewBuilder
     private var sessionsSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Time on battery").font(.headline)
+        VStack(alignment: .leading, spacing: Theme.Spacing.row + 2) {
+            Text("Time on battery").font(.title3.weight(.semibold))
             if sessions.isEmpty {
                 Text("Your Mac has been plugged in for this whole period.")
                     .font(.callout).foregroundStyle(.secondary)
@@ -206,12 +321,11 @@ struct HistoryView: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("\(session.start.formatted(date: .omitted, time: .shortened)) – \(session.end.formatted(date: .omitted, time: .shortened))")
                             Text(sessionSummary(session))
-                                .font(.caption).foregroundStyle(.secondary)
+                                .font(.callout).foregroundStyle(.secondary)
                         }
                         Spacer()
                     }
-                    .padding(10)
-                    .background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 8))
+                    .cardSurface()
                 }
             }
         }
@@ -238,13 +352,23 @@ struct HistoryView: View {
 
     @ViewBuilder
     private var consumersSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("What used the most energy").font(.headline)
+        VStack(alignment: .leading, spacing: Theme.Spacing.card) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("What used the most energy").font(.title3.weight(.semibold))
+                Spacer()
+                if let breakdown, !breakdown.rows.isEmpty {
+                    Text("\(breakdown.rows.count) apps")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
 
             if let breakdown, !breakdown.rows.isEmpty, breakdown.totalEnergyNJ > 0 {
-                ForEach(breakdown.rows) { row in
-                    consumerRow(row, share: breakdown.share(of: row))
+                VStack(alignment: .leading, spacing: Theme.Spacing.card) {
+                    ForEach(breakdown.rows) { row in
+                        consumerRow(row, share: breakdown.share(of: row))
+                    }
                 }
+                .cardSurface()
             } else {
                 Text("Nothing measurable yet.")
                     .font(.callout).foregroundStyle(.secondary)
@@ -258,7 +382,11 @@ struct HistoryView: View {
     private func consumerRow(_ row: HistoryStore.BucketRow, share: Double) -> some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(alignment: .firstTextBaseline) {
-                Text(row.displayName).lineLimit(1)
+                AppIconByBundleID(bundleID: row.bundleID, size: 16)
+                    // Keep the icon on the text baseline rather than letting it
+                    // drag the row's first-baseline alignment upward.
+                    .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 3 }
+                Text(row.displayName).lineLimit(1).fontWeight(.medium)
                 if row.confidence < 0.7 {
                     // Section 3: an incomplete total says so rather than passing as
                     // whole. The threshold sits below the 0.85 a fully readable energy
@@ -277,17 +405,16 @@ struct HistoryView: View {
             // the description below both carry the same information as the bar.
             GeometryReader { geometry in
                 ZStack(alignment: .leading) {
-                    RoundedRectangle(cornerRadius: 4)
-                        .fill(.quaternary.opacity(0.5))
-                    RoundedRectangle(cornerRadius: 4)
+                    Capsule().fill(.quaternary.opacity(0.4))
+                    Capsule()
                         .fill(.blue.gradient)
-                        .frame(width: max(2, geometry.size.width * share))
+                        .frame(width: max(3, geometry.size.width * share))
                 }
             }
-            .frame(height: 8)
+            .frame(height: 6)
 
             Text(comparison(row))
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.callout).foregroundStyle(.secondary)
         }
         .padding(.vertical, 2)
         .accessibilityElement(children: .combine)
@@ -317,8 +444,8 @@ struct HistoryView: View {
     /// Section 3.1: the honest caveat, stated once at the bottom in plain words
     /// instead of hedging every number above it.
     private var footnote: some View {
-        Text("These shares compare apps with each other. They do not add up to your whole battery — the screen, Wi-Fi and macOS itself also use power, and PowerTask cannot measure every process.")
-            .font(.caption)
+        Text("These shares compare apps with each other. They do not add up to your whole battery — the screen, Wi-Fi and macOS itself also use power, and Runwell cannot measure every process.")
+            .font(.callout)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
             .padding(.top, 4)

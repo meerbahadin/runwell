@@ -1,5 +1,5 @@
 import SwiftUI
-import PowerTaskKit
+import RunwellKit
 
 /// Section 8.1. Group total, child processes, provenance, explanation and actions.
 struct ProcessDetailView: View {
@@ -175,8 +175,7 @@ struct ProcessDetailView: View {
                         processActions(for: member)
                     }
                 }
-                .padding(10)
-                .background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 8))
+                .cardSurface()
             }
         }
     }

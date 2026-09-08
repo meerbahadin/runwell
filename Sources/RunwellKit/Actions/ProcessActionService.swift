@@ -85,7 +85,7 @@ public struct ProcessActionService: Sendable {
         public var isCompleteSuccess: Bool { skipped.isEmpty && failed.isEmpty }
     }
 
-    /// Section 8.4 applied to an application group: quit every process PowerTask is
+    /// Section 8.4 applied to an application group: quit every process Runwell is
     /// allowed to quit, and report the rest honestly.
     ///
     /// Protection is evaluated per process, never per group, so a group containing one
@@ -196,7 +196,7 @@ public struct ProcessActionService: Sendable {
         coverage: EnergyCoverage
     ) -> String {
         var lines: [String] = []
-        lines.append("PowerTask diagnostic summary")
+        lines.append("Runwell diagnostic summary")
         lines.append("Application: \(group.displayName)")
         lines.append("Processes: \(group.processCount)")
 

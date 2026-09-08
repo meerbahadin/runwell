@@ -1,8 +1,8 @@
 #!/bin/bash
 # Shows how far apart the recorded samples actually are, so the Section 5.1 cadence
 # can be checked against reality rather than against the setting that requested it.
-DB="$HOME/Library/Application Support/PowerTask/history.sqlite"
-[ -f "$DB" ] || { echo "No history database yet — run PowerTask first."; exit 1; }
+DB="$HOME/Library/Application Support/Runwell/history.sqlite"
+[ -f "$DB" ] || { echo "No history database yet — run Runwell first."; exit 1; }
 
 echo "Last 20 samples (newest first):"
 sqlite3 "$DB" "

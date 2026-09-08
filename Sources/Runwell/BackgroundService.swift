@@ -1,9 +1,9 @@
 import Foundation
 import AppKit
 import ServiceManagement
-import PowerTaskKit
+import RunwellKit
 
-/// Section 5.1 / 10.2. Keeps PowerTask recording when nobody is looking at it, at a
+/// Section 5.1 / 10.2. Keeps Runwell recording when nobody is looking at it, at a
 /// cadence chosen for the current power state.
 ///
 /// This is what makes history representative: a battery drains while the lid is shut
@@ -138,7 +138,7 @@ final class BackgroundService {
         isWindowVisible = false
         updateMode()
         // The Dock tile goes with the window: a tile implies something to click back
-        // to, and once PowerTask is only recording, the menu bar is the honest place
+        // to, and once Runwell is only recording, the menu bar is the honest place
         // for it. Reopening from the menu bar brings the tile back.
         applyActivationPolicy()
     }
@@ -164,7 +164,7 @@ final class BackgroundService {
         environment.setMode(mode)
     }
 
-    /// With no visible window an accessory app keeps no Dock tile, so PowerTask sits
+    /// With no visible window an accessory app keeps no Dock tile, so Runwell sits
     /// in the menu bar rather than looking like a window the user failed to close.
     private func applyActivationPolicy() {
         NSApp.setActivationPolicy(runsInBackground && !isWindowVisible ? .accessory : .regular)

@@ -125,7 +125,7 @@ public enum ApplicationStatus: String, Sendable {
 /// uncovered part explicit — Appendix F forbids normalizing app totals to 100%.
 public struct EnergyCoverage: Sendable {
     public let groups: [ApplicationGroup]
-    /// Total energy across every process PowerTask could actually read.
+    /// Total energy across every process Runwell could actually read.
     public let accessibleEnergyNJ: UInt64
     /// Number of processes that existed but could not be read (Section 5.2).
     public let inaccessibleProcessCount: Int
@@ -139,7 +139,7 @@ public struct EnergyCoverage: Sendable {
     /// Section 3.2: `measuredAppShare = appDeltaEnergyNJ / sum(allAccessibleProcessDeltaEnergyNJ)`.
     ///
     /// Section 3.1 requires this to be called "measured application energy share",
-    /// never "battery percentage used" — it is a share of what PowerTask can see,
+    /// never "battery percentage used" — it is a share of what Runwell can see,
     /// not of the battery pack.
     public func measuredAppShare(of group: ApplicationGroup) -> IntervalMetric<Double> {
         guard accessibleEnergyNJ > 0 else { return .unavailable(.awaitingSecondSample) }

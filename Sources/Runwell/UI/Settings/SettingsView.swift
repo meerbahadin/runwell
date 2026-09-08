@@ -1,5 +1,5 @@
 import SwiftUI
-import PowerTaskKit
+import RunwellKit
 
 /// Section 8.1. Sampling, retention, display conventions and privacy.
 struct SettingsView: View {
@@ -56,16 +56,16 @@ struct SettingsView: View {
 
                 Toggle("Keep recording when the window is closed", isOn: $background.runsInBackground)
                 Text(background.statusDescription)
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.callout).foregroundStyle(.secondary)
 
-                Toggle("Start PowerTask when I log in", isOn: $background.launchesAtLogin)
+                Toggle("Start Runwell when I log in", isOn: $background.launchesAtLogin)
                 Text("Without this, nothing is recorded until you open the app — so an overnight battery drain would be missed.")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.callout).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
 
                 if let error = background.loginItemError {
                     Label(error, systemImage: "exclamationmark.triangle")
-                        .font(.caption).foregroundStyle(.orange)
+                        .font(.callout).foregroundStyle(.orange)
                 }
             }
         }
@@ -89,7 +89,7 @@ struct SettingsView: View {
             .pickerStyle(.radioGroup)
 
             Text("A shorter interval updates sooner and costs slightly more energy.")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.callout).foregroundStyle(.secondary)
         }
     }
 
@@ -107,7 +107,7 @@ struct SettingsView: View {
             Text(environment.normalizeCPU
                  ? "A process using every core reads as 100%."
                  : "Matches Activity Monitor: a process using four cores reads as 400%.")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.callout).foregroundStyle(.secondary)
         }
     }
 
@@ -124,11 +124,11 @@ struct SettingsView: View {
             ))
 
             Text("Samples stay on this Mac. Nothing is uploaded.")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.callout).foregroundStyle(.secondary)
 
             if let error = environment.historyError {
                 Label(error, systemImage: "exclamationmark.triangle")
-                    .font(.caption).foregroundStyle(.orange)
+                    .font(.callout).foregroundStyle(.orange)
             }
 
             if let statistics {
@@ -158,7 +158,7 @@ struct SettingsView: View {
 
             // Section 7.2 retention tiers, stated rather than buried.
             Text("Raw samples are kept for 2 hours, per-minute totals for 7 days and 15-minute totals for 90 days.")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.callout).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
             Button("Delete All History…", role: .destructive) { confirmingClear = true }
@@ -177,9 +177,22 @@ struct SettingsView: View {
             ))
             // Section 8.3: rules need a condition to hold, so alerts do not fire on
             // a momentary spike.
-            Text("Off by default. PowerTask only alerts when a condition lasts — at least a minute of high energy, or two minutes of background activity — and never sends more than one notification every few minutes. Insights always appear in the app regardless of this setting.")
-                .font(.caption).foregroundStyle(.secondary)
+            Text("Off by default. Runwell only alerts when a condition lasts — at least a minute of high energy, or two minutes of background activity — and never sends more than one notification every few minutes. Insights always appear in the app regardless of this setting.")
+                .font(.callout).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+
+            // A denied system permission silently swallows every banner, which is
+            // indistinguishable from "nothing is wrong". Say so instead.
+            if environment.areNotificationsEnabled,
+               NotificationService.shared.authorizationAnswer == false {
+                Label(
+                    "macOS is blocking notifications for Runwell. Turn them on in System Settings › Notifications › Runwell.",
+                    systemImage: "exclamationmark.triangle.fill"
+                )
+                .font(.caption)
+                .foregroundStyle(.orange)
+                .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 

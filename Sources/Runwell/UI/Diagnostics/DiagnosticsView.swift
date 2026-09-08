@@ -1,5 +1,5 @@
 import SwiftUI
-import PowerTaskKit
+import RunwellKit
 
 /// Section 10.3. A local diagnostics page showing collector health without requiring
 /// remote telemetry. Appendix F: the OS build and hardware identifier are recorded
@@ -73,8 +73,7 @@ struct DiagnosticsView: View {
                         }
                         Spacer()
                     }
-                    .padding(10)
-                    .background(.quaternary.opacity(0.25), in: RoundedRectangle(cornerRadius: 8))
+                    .cardSurface()
                 }
             }
         }
@@ -140,7 +139,7 @@ struct DiagnosticsView: View {
 
     /// A redacted health report: capability state only, no process information.
     private var report: String {
-        var lines = ["PowerTask diagnostics"]
+        var lines = ["Runwell diagnostics"]
         lines.append("macOS build: \(environment.capabilities.osBuild)")
         lines.append("Model: \(environment.capabilities.hardwareModel)")
         lines.append("Cores: \(environment.capabilities.logicalProcessorCount)")

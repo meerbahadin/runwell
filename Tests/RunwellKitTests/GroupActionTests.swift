@@ -1,6 +1,6 @@
 import Testing
 import Foundation
-@testable import PowerTaskKit
+@testable import RunwellKit
 
 /// Section 8.4 / 9.2 / 12.2: "Force quit cannot be triggered accidentally and
 /// protected-process policy is covered by tests" — extended to group actions, where
@@ -77,11 +77,11 @@ struct GroupActionTests {
         #expect(!outcome.isCompleteSuccess)
     }
 
-    @Test("PowerTask never quits itself as part of a group")
+    @Test("Runwell never quits itself as part of a group")
     @MainActor
     func neverQuitsSelf() {
         let service = ProcessActionService()
-        let g = group([identity(name: "PowerTask", pid: getpid())])
+        let g = group([identity(name: "Runwell", pid: getpid())])
         let outcome = service.quitGroup(g)
         #expect(outcome.terminated.isEmpty)
         #expect(outcome.skipped.count == 1)

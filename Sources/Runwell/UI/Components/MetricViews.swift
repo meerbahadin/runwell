@@ -1,5 +1,5 @@
 import SwiftUI
-import PowerTaskKit
+import RunwellKit
 
 /// Section 3 / 8.5. Renders a metric together with its provenance.
 ///
@@ -98,6 +98,29 @@ struct MemoryText: View {
 }
 
 /// The application icon, loaded from the resolved bundle.
+/// An app icon resolved from a bundle identifier rather than a path, for history
+/// rows: Section 7.1 keeps filesystem paths out of the database, so the stored
+/// identifier is all there is to go on. Falls back to a generic glyph when the app
+/// is no longer installed — history outlives installs.
+struct AppIconByBundleID: View {
+    let bundleID: String?
+    var size: CGFloat = 16
+
+    var body: some View {
+        if let url = bundleID.flatMap({
+            NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0)
+        }) {
+            AppIcon(bundleURL: url, size: size)
+        } else {
+            Image(systemName: "app.dashed")
+                .resizable()
+                .scaledToFit()
+                .frame(width: size, height: size)
+                .foregroundStyle(.tertiary)
+        }
+    }
+}
+
 struct AppIcon: View {
     let bundleURL: URL?
     var size: CGFloat = 16

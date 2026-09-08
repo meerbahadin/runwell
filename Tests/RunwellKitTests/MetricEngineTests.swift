@@ -1,6 +1,6 @@
 import Testing
 import Foundation
-@testable import PowerTaskKit
+@testable import RunwellKit
 
 /// Section 11.1 unit layer: delta arithmetic, PID reuse, counter reset and smoothing.
 

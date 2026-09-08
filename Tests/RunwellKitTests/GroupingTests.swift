@@ -1,6 +1,6 @@
 import Testing
 import Foundation
-@testable import PowerTaskKit
+@testable import RunwellKit
 
 /// Section 11.1: grouping rules and redaction.
 
@@ -200,9 +200,9 @@ struct PolicyTests {
         #expect(policy.evaluate(identity: identity(name: "theirapp", uid: getuid() &+ 1)).isBlocked)
     }
 
-    @Test("PowerTask will not offer to quit itself")
+    @Test("Runwell will not offer to quit itself")
     func selfBlocked() {
-        #expect(policy.evaluate(identity: identity(name: "PowerTask", uid: getuid(), pid: getpid())).isBlocked)
+        #expect(policy.evaluate(identity: identity(name: "Runwell", uid: getuid(), pid: getpid())).isBlocked)
     }
 
     @Test("System-shipped user processes require confirmation")

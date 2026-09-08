@@ -40,12 +40,41 @@ public actor HistoryStore {
 
     /// Where the database lives. Application Support, not a shared or synced location.
     public static func defaultURL() throws -> URL {
-        let base = try FileManager.default.url(
+        let support = try FileManager.default.url(
             for: .applicationSupportDirectory, in: .userDomainMask,
             appropriateFor: nil, create: true
-        ).appendingPathComponent("PowerTask", isDirectory: true)
+        )
+        let base = support.appendingPathComponent("Runwell", isDirectory: true)
         try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
-        return base.appendingPathComponent("history.sqlite")
+        let url = base.appendingPathComponent("history.sqlite")
+        adoptLegacyDatabase(from: support, to: url)
+        return url
+    }
+
+    /// The app was called PowerTask before, and its history sits under that name.
+    /// Recorded battery history is not reproducible — it is a record of time that has
+    /// already passed — so the rename moves it rather than starting empty.
+    ///
+    /// Moves only when there is nothing at the destination, so a later launch can
+    /// never overwrite newer data with the stale copy left behind by an earlier one.
+    private static func adoptLegacyDatabase(from support: URL, to destination: URL) {
+        let manager = FileManager.default
+        guard !manager.fileExists(atPath: destination.path) else { return }
+        let legacy = support
+            .appendingPathComponent("PowerTask", isDirectory: true)
+            .appendingPathComponent("history.sqlite")
+        guard manager.fileExists(atPath: legacy.path) else { return }
+
+        // SQLite keeps its write-ahead log and shared-memory file beside the
+        // database; moving the database alone can strand committed transactions.
+        for suffix in ["", "-wal", "-shm"] {
+            let source = URL(fileURLWithPath: legacy.path + suffix)
+            guard manager.fileExists(atPath: source.path) else { continue }
+            let target = URL(fileURLWithPath: destination.path + suffix)
+            // A failure here is not fatal: the app continues with an empty history
+            // rather than refusing to start.
+            try? manager.moveItem(at: source, to: target)
+        }
     }
 
     public init(url: URL, retention: RetentionPolicy = .default) throws {
@@ -172,6 +201,10 @@ public actor HistoryStore {
         public let averageCPUPercent: Double
         public let peakMemoryBytes: UInt64
         public let confidence: Double
+        /// The application's bundle identifier, when it had one. Section 7.1 keeps
+        /// paths out of the database, so this is what a caller resolves an icon
+        /// from — it is an identifier, not a location.
+        public let bundleID: String?
         /// Seconds this application was actually observed, from its sample count —
         /// not the length of the window, since an app may have started partway in.
         public let observedSeconds: Double
@@ -188,7 +221,7 @@ public actor HistoryStore {
     }
 
     /// A window of history with each application's share of it. Section 3.1: the
-    /// denominator is what PowerTask could measure, never the battery pack, so the
+    /// denominator is what Runwell could measure, never the battery pack, so the
     /// share must be presented as a share of measured application energy.
     public struct EnergyBreakdown: Sendable {
         public let rows: [BucketRow]
@@ -212,7 +245,7 @@ public actor HistoryStore {
             SELECT b.app_group_id, g.display_name, MIN(b.bucket_start),
                    SUM(b.energy_nj_sum), AVG(b.cpu_percent_sum / b.sample_count),
                    MAX(b.memory_bytes_max), AVG(b.coverage_confidence),
-                   SUM(b.sample_count)
+                   SUM(b.sample_count), g.bundle_id
             FROM bucket b
             JOIN app_group g ON g.id = b.app_group_id
             WHERE b.granularity = ? AND b.bucket_start >= ? AND b.bucket_start < ?
@@ -236,6 +269,7 @@ public actor HistoryStore {
                     averageCPUPercent: row.double(4),
                     peakMemoryBytes: UInt64(max(0, row.int(5))),
                     confidence: row.double(6),
+                    bundleID: row.string(8),
                     observedSeconds: sampleCount * 2
                 ))
             }

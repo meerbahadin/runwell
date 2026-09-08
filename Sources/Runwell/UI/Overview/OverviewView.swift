@@ -1,5 +1,5 @@
 import SwiftUI
-import PowerTaskKit
+import RunwellKit
 
 /// Section 8.1. Battery state, measured app energy coverage and the top drains.
 ///
@@ -12,12 +12,14 @@ struct OverviewView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                insightsSection
                 batterySection
                 Divider()
                 topDrainSection
                 Divider()
                 coverageSection
+                // The divider lives inside the section so it disappears along with
+                // it: with no insights, a trailing rule would fence off nothing.
+                insightsSection
             }
             .padding(20)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -27,34 +29,17 @@ struct OverviewView: View {
 
     // MARK: - Insights
 
-    /// Section 8.3. The explanation sits above the numbers: a user who opens the app
-    /// because something feels wrong should read the answer before the evidence.
+    /// Section 8.3. The insights sit below the measurements: the numbers are the
+    /// reason to trust them, so a reader arrives at a claim about an app having
+    /// already seen the battery state, the drains and how much of the system's
+    /// energy Runwell can actually account for.
     @ViewBuilder
     private var insightsSection: some View {
         if !environment.insights.isEmpty {
-            VStack(alignment: .leading, spacing: 8) {
+            Divider()
+            VStack(alignment: .leading, spacing: Theme.Spacing.row) {
                 ForEach(environment.insights) { insight in
-                    HStack(alignment: .top, spacing: 10) {
-                        // Section 8.5: an icon and text, never colour alone.
-                        Image(systemName: insight.rule.symbolName)
-                            .foregroundStyle(insight.severity == .warning ? .orange : .secondary)
-                            .frame(width: 18)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(insight.message)
-                            Text(insight.evidence)
-                                .font(.caption).foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        Spacer()
-                        // Section 8.4 "Ignore alerts".
-                        Button("Ignore") { environment.mute(insight) }
-                            .buttonStyle(.plain)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .help("Stops this alert for this app. Measurement continues.")
-                    }
-                    .padding(12)
-                    .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 10))
+                    InsightRow(insight: insight) { environment.mute(insight) }
                 }
             }
             Divider()
@@ -115,7 +100,7 @@ struct OverviewView: View {
             if battery.isCharged { return "Fully charged" }
             // macOS itself withholds an estimate for the first few minutes after a
             // power-source change. Section 3: say who is unable to answer and why,
-            // rather than implying PowerTask is calculating something.
+            // rather than implying Runwell is calculating something.
             return battery.powerSource == .wallPower ? "—" : "macOS has not estimated a time yet"
         }
         let hours = Int(seconds) / 3600
@@ -162,8 +147,7 @@ struct OverviewView: View {
                     Spacer()
                     StatusBadge(status: top.status)
                 }
-                .padding(12)
-                .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 10))
+                .cardSurface(raised: true)
             } else {
                 Label("No application is using measurable energy right now.",
                       systemImage: "leaf")
@@ -183,7 +167,7 @@ struct OverviewView: View {
             // Section 3.1: the display, radios, DRAM and kernel work are not
             // attributable to any app, so this must never be presented as a full
             // account of battery discharge.
-            Text("PowerTask can measure energy for the processes it is allowed to read. The display, radios and system services are not included, so these shares describe applications only — not your whole battery.")
+            Text("Runwell can measure energy for the processes it is allowed to read. The display, radios and system services are not included, so these shares describe applications only — not your whole battery.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

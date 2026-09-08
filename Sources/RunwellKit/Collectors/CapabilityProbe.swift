@@ -12,6 +12,7 @@ public enum Collector: String, Sendable, CaseIterable {
     case processDisk
     case processWakeups
     case battery
+    case memoryPressure
     case totalGPU
     case perProcessGPU
 
@@ -24,6 +25,7 @@ public enum Collector: String, Sendable, CaseIterable {
         case .processDisk: "Disk"
         case .processWakeups: "Wakeups"
         case .battery: "Battery"
+        case .memoryPressure: "Memory pressure"
         case .totalGPU: "Total GPU"
         case .perProcessGPU: "Per-process GPU"
         }
@@ -119,6 +121,15 @@ public struct CapabilityProbe: Sendable {
         let battery = BatteryCollector().hasBattery()
         record(.battery, battery,
                battery ? "Power source reporting available." : "No battery in this Mac; running in resource-monitor mode.",
+               .measured)
+
+        // Section 8.3: the memory insight is gated on the kernel's own pressure
+        // level. Without it the rule cannot be evidenced honestly, so it stays off
+        // rather than falling back to a proxy that is always true.
+        let pressure = MemoryPressureCollector().isAvailable()
+        record(.memoryPressure, pressure,
+               pressure ? "Reading the kernel memory pressure level."
+                        : "kern.memorystatus_vm_pressure_level is unreadable on this system.",
                .measured)
 
         // Section 5.7 GPU feasibility gate. Per-process GPU stays off until a

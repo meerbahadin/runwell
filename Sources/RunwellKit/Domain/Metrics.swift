@@ -144,7 +144,7 @@ public struct BatterySnapshot: Sendable {
     public let isCharged: Bool
     public let isPresent: Bool
     /// OS-provided estimate. Section 5.10 marks this measured-or-estimated *by the OS*:
-    /// PowerTask passes it through rather than inventing its own model.
+    /// Runwell passes it through rather than inventing its own model.
     public let timeRemaining: IntervalMetric<TimeInterval>
     public let capturedAt: MonotonicInstant
 

@@ -55,7 +55,7 @@ public struct BatteryCollector: Sendable {
                 percentage = .unavailable(.notSupportedOnThisHardware)
             }
 
-            // Section 5.10 marks this measured-or-estimated *by the OS*. PowerTask
+            // Section 5.10 marks this measured-or-estimated *by the OS*. Runwell
             // passes the value through and never substitutes its own model.
             //
             // Three states are distinct and must not collapse into "0 minutes":

@@ -1,6 +1,6 @@
 import SwiftUI
 import AppKit
-import PowerTaskKit
+import RunwellKit
 import Observation
 
 /// Section 4.1. Owns the sampler and publishes immutable snapshots to the UI.
@@ -53,7 +53,16 @@ final class AppEnvironment {
     /// and Section 1.3's restraint applies to interruptions as much as to sampling:
     /// the insights are always visible in the app, so notifying is opt-in.
     var areNotificationsEnabled = UserDefaults.standard.object(forKey: "notifications") as? Bool ?? false {
-        didSet { UserDefaults.standard.set(areNotificationsEnabled, forKey: "notifications") }
+        didSet {
+            UserDefaults.standard.set(areNotificationsEnabled, forKey: "notifications")
+            // Ask when the user opts in, not when an insight happens to fire. Tying
+            // the prompt to the first insight meant a dialog the user missed left
+            // notifications permanently silent: the same condition stays raised, so
+            // there is no second transition to ask again on.
+            if areNotificationsEnabled {
+                NotificationService.shared.requestAuthorizationIfNeeded()
+            }
+        }
     }
 
     // MARK: - History
@@ -86,6 +95,13 @@ final class AppEnvironment {
         // Section 8.3: thresholds are calibrated to this Mac rather than fixed.
         self.insightEngine = InsightEngine(thresholds: .calibrated(for: capabilities))
         if isHistoryEnabled { openHistory() }
+        // Settle authorization at construction, not in the window's .task: with
+        // background recording on, Runwell can launch straight into the menu bar
+        // with no window, and an authorization request that never ran meant every
+        // banner was silently dropped for the whole session.
+        if areNotificationsEnabled {
+            NotificationService.shared.requestAuthorizationIfNeeded()
+        }
     }
 
     private func openHistory() {
@@ -159,8 +175,10 @@ final class AppEnvironment {
         )
         insights = insightState.activeInsights
 
-        if areNotificationsEnabled, !newlyRaised.isEmpty {
-            // Batched: the service decides what is worth interrupting for.
+        if areNotificationsEnabled {
+            // Called every cycle, not only on a transition: insights held back by a
+            // spacing window have no second transition to arrive on, so the service
+            // needs a tick to release them.
             NotificationService.shared.post(newlyRaised)
         }
     }

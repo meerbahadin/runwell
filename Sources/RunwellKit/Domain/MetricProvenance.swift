@@ -3,7 +3,7 @@ import Foundation
 /// Section 3: the measurement truth model.
 ///
 /// Every value the UI shows carries one of these. This is a product requirement,
-/// not an implementation detail: PowerTask must never present an estimate as a
+/// not an implementation detail: Runwell must never present an estimate as a
 /// hardware measurement.
 public enum MetricProvenance: String, Codable, Sendable, CaseIterable {
     /// Read directly from a system counter or power-source interface.
