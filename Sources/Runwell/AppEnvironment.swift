@@ -43,6 +43,13 @@ final class AppEnvironment {
     private var insightState = InsightEngine.State()
     private(set) var insights: [Insight] = []
 
+    /// The application an insight is about, when it is still running. An insight can
+    /// outlive the process it names — a stored episode is history, not a live thing —
+    /// so this is optional by design.
+    func group(for insight: Insight) -> ApplicationGroup? {
+        groups.first { $0.id == insight.appGroupID }
+    }
+
     /// Section 8.4 "Ignore alerts": muting stops the alert, never the measurement.
     func mute(_ insight: Insight) {
         insightState.mute(insight)
@@ -73,6 +80,14 @@ final class AppEnvironment {
 
     /// Section 7.2 / 9.1: history can be disabled entirely while live monitoring
     /// continues. Persisted so the choice survives a relaunch.
+    /// Whether the first-run introduction has been completed. Defaults to false so
+    /// a fresh install sees it; existing installs upgrading into this version see it
+    /// once too, which is the right call — the measurement model was never explained
+    /// to them either.
+    var hasCompletedOnboarding = UserDefaults.standard.bool(forKey: "hasCompletedOnboarding") {
+        didSet { UserDefaults.standard.set(hasCompletedOnboarding, forKey: "hasCompletedOnboarding") }
+    }
+
     var isHistoryEnabled = UserDefaults.standard.object(forKey: "historyEnabled") as? Bool ?? true {
         didSet {
             UserDefaults.standard.set(isHistoryEnabled, forKey: "historyEnabled")
@@ -174,6 +189,18 @@ final class AppEnvironment {
             snapshot: snapshot, foregroundGroupIDs: foreground, state: &insightState
         )
         insights = insightState.activeInsights
+
+        // Section 7.1: persist the episode so it outlives the live view. Gated on
+        // the history setting like every other recording — an insight log is a
+        // record of when the Mac was used and for what.
+        if isHistoryEnabled, let history {
+            let live = Set(insightState.activeInsights.map(\.id))
+            let raised = newlyRaised
+            Task {
+                try? await history.recordInsightsRaised(raised)
+                try? await history.closeInsights(stillOpen: live)
+            }
+        }
 
         if areNotificationsEnabled {
             // Called every cycle, not only on a transition: insights held back by a

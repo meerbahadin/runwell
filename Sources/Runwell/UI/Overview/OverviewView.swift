@@ -8,6 +8,9 @@ import RunwellKit
 /// thing on this screen.
 struct OverviewView: View {
     @Environment(AppEnvironment.self) private var environment
+    /// Result of the last quit attempt, so a refusal is explained rather than
+    /// looking like the button did nothing.
+    @State private var quitOutcome: ProcessActionService.GroupOutcome?
 
     var body: some View {
         ScrollView {
@@ -25,6 +28,20 @@ struct OverviewView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .navigationTitle("Overview")
+        // A quit that was partly or wholly refused must say so: the policy protects
+        // system processes and Runwell itself, and silence would read as a bug.
+        .alert(
+            "Quit result",
+            isPresented: Binding(
+                get: { quitOutcome != nil },
+                set: { if !$0 { quitOutcome = nil } }
+            ),
+            presenting: quitOutcome
+        ) { _ in
+            Button("OK") { quitOutcome = nil }
+        } message: { outcome in
+            Text(quitSummary(outcome))
+        }
     }
 
     // MARK: - Insights
@@ -39,11 +56,49 @@ struct OverviewView: View {
             Divider()
             VStack(alignment: .leading, spacing: Theme.Spacing.row) {
                 ForEach(environment.insights) { insight in
-                    InsightRow(insight: insight) { environment.mute(insight) }
+                    let group = environment.group(for: insight)
+                    // Only offer to quit what the policy actually permits: a group
+                    // whose every process is protected would present a button that
+                    // could not work.
+                    let quittable = group.map { candidate in
+                        candidate.members.contains {
+                            !environment.actions.protection(for: $0.identity).isBlocked
+                        }
+                    } ?? false
+                    InsightRow(
+                        insight: insight,
+                        onIgnore: { environment.mute(insight) },
+                        group: quittable ? group : nil,
+                        onQuit: quittable && group != nil
+                            ? { force in
+                                quitOutcome = force
+                                    ? environment.actions.forceQuitGroup(group!, userConfirmed: true)
+                                    : environment.actions.quitGroup(group!)
+                            }
+                            : nil
+                    )
                 }
             }
             Divider()
         }
+    }
+
+    /// Plain account of what happened, including what was refused and why.
+    private func quitSummary(_ outcome: ProcessActionService.GroupOutcome) -> String {
+        var parts: [String] = []
+        if !outcome.terminated.isEmpty {
+            parts.append("Quit \(outcome.terminated.count == 1 ? "1 process" : "\(outcome.terminated.count) processes").")
+        }
+        if outcome.alreadyGone > 0 {
+            parts.append("\(outcome.alreadyGone) had already exited.")
+        }
+        for skipped in outcome.skipped {
+            parts.append("\(skipped.name): \(skipped.reason)")
+        }
+        for failed in outcome.failed {
+            parts.append("\(failed.name) did not quit: \(failed.reason)")
+        }
+        return parts.isEmpty ? "Nothing to quit." : parts.joined(separator: "\n")
     }
 
     // MARK: - Battery
@@ -69,7 +124,6 @@ struct OverviewView: View {
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
-                    ProvenanceBadge(provenance: battery.percentage.provenance)
                 }
                 .accessibilityElement(children: .combine)
             } else {
@@ -130,7 +184,6 @@ struct OverviewView: View {
                         HStack(spacing: 6) {
                             MetricText(metric: top.totalEnergyWatts, format: "%.2f", suffix: " W")
                                 .font(.callout)
-                            ProvenanceBadge(provenance: top.totalEnergyWatts.provenance, compact: true)
                             if top.processCount > 1 {
                                 Text("· \(top.processCount) processes")
                                     .font(.callout)

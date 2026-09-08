@@ -8,8 +8,13 @@ import RunwellKit
 struct InsightRow: View {
     let insight: Insight
     let onIgnore: () -> Void
+    /// The running application this insight names, when it is still running. Nil
+    /// means there is nothing to quit — the process has already gone.
+    var group: ApplicationGroup?
+    var onQuit: ((_ force: Bool) -> Void)?
 
     @State private var isHovering = false
+    @State private var confirmingQuit = false
 
     var body: some View {
         HStack(alignment: .top, spacing: Theme.Spacing.row + 2) {
@@ -34,6 +39,34 @@ struct InsightRow: View {
 
             Spacer(minLength: Theme.Spacing.row)
 
+            // Telling someone an app is draining their battery and offering no way
+            // to act on it leaves them to hunt for it in Activity Monitor. The
+            // protection policy still applies: system-owned processes and Runwell
+            // itself refuse to be quit here as anywhere else.
+            if let group, onQuit != nil {
+                Button("Quit") { confirmingQuit = true }
+                    .buttonStyle(.plain)
+                    .font(.caption)
+                    .foregroundStyle(isHovering ? .primary : .secondary)
+                    .padding(.horizontal, Theme.Spacing.row)
+                    .padding(.vertical, Theme.Spacing.tight)
+                    .background(.quaternary.opacity(isHovering ? 0.5 : 0), in: Capsule())
+                    .contentShape(Capsule())
+                    .help("Quits \(group.displayName). Unsaved work may be lost.")
+                    .accessibilityLabel("Quit \(group.displayName)")
+                    .confirmationDialog(
+                        "Quit \(group.displayName)?",
+                        isPresented: $confirmingQuit, titleVisibility: .visible
+                    ) {
+                        Button("Quit", role: .destructive) { onQuit?(false) }
+                        // Section 8.4: available, never the default.
+                        Button("Force Quit", role: .destructive) { onQuit?(true) }
+                        Button("Cancel", role: .cancel) {}
+                    } message: {
+                        Text(quitExplanation(group))
+                    }
+            }
+
             // Section 8.4 "Ignore alerts". Styled as secondary text before, which
             // gave no sign it could be clicked; it now reveals itself on hover.
             Button("Ignore", action: onIgnore)
@@ -53,5 +86,15 @@ struct InsightRow: View {
         .cardSurface()
         // Motion stays subtle: a hover cue should not announce itself.
         .animation(.easeOut(duration: 0.12), value: isHovering)
+    }
+
+    /// Says what quitting will actually do, including how many processes go with it:
+    /// quitting "Chrome" closes every tab, and that should not be a surprise.
+    private func quitExplanation(_ group: ApplicationGroup) -> String {
+        let processes = group.processCount
+        let scope = processes > 1
+            ? "This closes all \(processes) of its processes. "
+            : ""
+        return scope + "Quit asks politely and may be ignored; Force Quit ends it immediately. Unsaved work may be lost."
     }
 }

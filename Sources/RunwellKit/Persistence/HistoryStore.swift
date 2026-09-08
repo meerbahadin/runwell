@@ -235,6 +235,127 @@ public actor HistoryStore {
         }
     }
 
+    // MARK: - Insights
+
+    /// Records a raised insight, and closes it when the condition lapses.
+    ///
+    /// Section 7.1's `insight_event` table has existed since the first migration but
+    /// nothing wrote to it, so every condition the app detected vanished the moment
+    /// it scrolled off screen. Duration is what makes an insight worth keeping: an
+    /// app drawing 18 W for four hours is a different story from one doing it for
+    /// twenty seconds, and live readings cannot tell them apart.
+    public func recordInsightsRaised(_ insights: [Insight], at wallClock: Date = Date()) throws {
+        guard !insights.isEmpty else { return }
+        try database.transaction {
+            for insight in insights {
+                // The app_group row may not exist yet if this is the first cycle the
+                // app appeared in; the foreign key requires it.
+                try database.prepare("""
+                    INSERT INTO app_group (id, display_name, bundle_id, first_seen, last_seen)
+                    VALUES (?, ?, NULL, ?, ?)
+                    ON CONFLICT(id) DO UPDATE SET last_seen = excluded.last_seen
+                    """)
+                    .bind(1, insight.appGroupID.storageKey)
+                    .bind(2, insight.appName)
+                    .bind(3, Int64(insight.startedAt.timeIntervalSince1970))
+                    .bind(4, Int64(wallClock.timeIntervalSince1970))
+                    .run()
+
+                // One open row per rule per app: re-raising a condition that is
+                // already open would double-count the same episode.
+                try database.prepare("""
+                    INSERT INTO insight_event
+                        (app_group_id, type, started_at, ended_at, severity, evidence_json)
+                    SELECT ?, ?, ?, NULL, ?, ?
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM insight_event
+                        WHERE app_group_id = ? AND type = ? AND ended_at IS NULL
+                    )
+                    """)
+                    .bind(1, insight.appGroupID.storageKey)
+                    .bind(2, insight.rule.rawValue)
+                    .bind(3, Int64(insight.startedAt.timeIntervalSince1970))
+                    .bind(4, insight.severity.rawValue)
+                    .bind(5, insight.evidence)
+                    .bind(6, insight.appGroupID.storageKey)
+                    .bind(7, insight.rule.rawValue)
+                    .run()
+            }
+        }
+    }
+
+    /// Closes any open episode that is no longer live, so a stored insight has an
+    /// end as well as a beginning.
+    public func closeInsights(stillOpen liveIDs: Set<String>, at wallClock: Date = Date()) throws {
+        var rows: [(Int64, String, String)] = []
+        try database.prepare("""
+            SELECT id, app_group_id, type FROM insight_event WHERE ended_at IS NULL
+            """).query { row in
+                rows.append((row.int(0), row.string(1), row.string(2)))
+            }
+        let stale = rows.filter { !liveIDs.contains("\($0.2):\($0.1)") }
+        guard !stale.isEmpty else { return }
+        try database.transaction {
+            for (id, _, _) in stale {
+                try database.prepare("UPDATE insight_event SET ended_at = ? WHERE id = ?")
+                    .bind(1, Int64(wallClock.timeIntervalSince1970))
+                    .bind(2, id)
+                    .run()
+            }
+        }
+    }
+
+    /// One stored episode: a condition that held for a period, with its duration.
+    public struct InsightEpisode: Sendable, Identifiable {
+        public let id: Int64
+        public let appName: String
+        public let rule: InsightRule
+        public let severity: InsightSeverity
+        public let started: Date
+        /// Nil while the condition is still live.
+        public let ended: Date?
+        public let evidence: String
+
+        /// Measured against now while still open, so a live episode's duration grows.
+        public func duration(now: Date = Date()) -> TimeInterval {
+            (ended ?? now).timeIntervalSince(started)
+        }
+    }
+
+    /// Episodes overlapping a window, longest first — the answer to "what has been
+    /// draining my battery this week", which live readings cannot give.
+    public func insightHistory(from: Date, to: Date, limit: Int = 20) throws -> [InsightEpisode] {
+        var episodes: [InsightEpisode] = []
+        try database.prepare("""
+            SELECT e.id, g.display_name, e.type, e.severity, e.started_at, e.ended_at,
+                   COALESCE(e.evidence_json, '')
+            FROM insight_event e
+            JOIN app_group g ON g.id = e.app_group_id
+            WHERE e.started_at < ? AND (e.ended_at IS NULL OR e.ended_at >= ?)
+            ORDER BY COALESCE(e.ended_at, ?) - e.started_at DESC
+            LIMIT ?
+            """)
+            .bind(1, Int64(to.timeIntervalSince1970))
+            .bind(2, Int64(from.timeIntervalSince1970))
+            .bind(3, Int64(to.timeIntervalSince1970))
+            .bind(4, Int64(limit))
+            .query { row in
+                guard let rule = InsightRule(rawValue: row.string(2)),
+                      let severity = InsightSeverity(rawValue: row.string(3)) else { return }
+                let endedAt = row.int(5)
+                episodes.append(InsightEpisode(
+                    id: row.int(0),
+                    appName: row.string(1),
+                    rule: rule,
+                    severity: severity,
+                    started: Date(timeIntervalSince1970: TimeInterval(row.int(4))),
+                    ended: endedAt > 0 ? Date(timeIntervalSince1970: TimeInterval(endedAt)) : nil,
+                    evidence: row.string(6)
+                ))
+            }
+        return episodes
+    }
+
     /// Total measured energy per application between two dates, biggest first.
     /// This is the query that answers "what drained my battery this afternoon".
     public func topEnergyConsumers(

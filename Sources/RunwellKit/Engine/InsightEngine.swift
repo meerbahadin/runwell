@@ -130,6 +130,17 @@ public struct InsightEngine: Sendable {
         // rule stays silent no matter how the footprints are distributed. An
         // unreadable level is unknown, not "normal" and not "under pressure", so it
         // also stays silent (Section 3).
+        // Section 5.9. Assertions matter only once the screen is dark: one held
+        // while the user is working is the feature working as intended.
+        let blamedByAssertion: [pid_t: SleepAssertionCollector.Assertion]
+        if snapshot.displayIsAsleep, let assertions = snapshot.sleepAssertions {
+            blamedByAssertion = Dictionary(
+                assertions.filter(\.kind.isSystemLevel).map { ($0.pid, $0) },
+                uniquingKeysWith: { first, _ in first })
+        } else {
+            blamedByAssertion = [:]
+        }
+
         let pressureLevel = pressureSource()
         let systemUnderMemoryPressure = pressureLevel.value?.isUnderPressure ?? false
 
@@ -150,7 +161,8 @@ public struct InsightEngine: Sendable {
                     for: rule, group: group, isForeground: isForeground,
                     topDecileCutoff: topDecileCutoff,
                     pressureLevel: pressureLevel.value,
-                    systemUnderMemoryPressure: systemUnderMemoryPressure
+                    systemUnderMemoryPressure: systemUnderMemoryPressure,
+                    assertions: blamedByAssertion
                 )
 
                 guard let evidence else {
@@ -202,7 +214,8 @@ public struct InsightEngine: Sendable {
         isForeground: Bool,
         topDecileCutoff: UInt64,
         pressureLevel: MemoryPressureLevel?,
-        systemUnderMemoryPressure: Bool
+        systemUnderMemoryPressure: Bool,
+        assertions: [pid_t: SleepAssertionCollector.Assertion]
     ) -> String? {
         switch rule {
         case .sustainedEnergy:
@@ -254,9 +267,15 @@ public struct InsightEngine: Sendable {
                           + "which stops it from idling.", wakeups)
 
         case .sleepPrevention:
-            // Section 5.9: no validated source yet, so this never fires rather than
-            // guessing from an unrelated signal.
-            return nil
+            // The system's own processes hold assertions as a matter of course —
+            // powerd keeps one whenever the display is on — and blaming macOS for
+            // macOS is noise the user can do nothing about.
+            guard !group.members.contains(where: { $0.identity.userID == 0 }) else { return nil }
+            guard let assertion = group.members.lazy
+                .compactMap({ assertions[$0.key.pid] }).first else { return nil }
+            // The assertion's own description, so the claim arrives in the system's
+            // words rather than ours.
+            return "Holding a power assertion (\(assertion.name)) while the screen is off."
         }
     }
 }

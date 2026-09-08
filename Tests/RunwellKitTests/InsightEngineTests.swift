@@ -8,11 +8,12 @@ import Foundation
 struct InsightEngineTests {
     private func group(
         name: String, watts: Double?, cpu: Double = 0,
-        memoryBytes: UInt64 = 1_000_000, wakeups: Double = 0
+        memoryBytes: UInt64 = 1_000_000, wakeups: Double = 0,
+        pid: pid_t = 1, userID: uid_t? = nil
     ) -> ApplicationGroup {
         let identity = ProcessIdentity(
-            key: ProcessKey(pid: 1, startAbsoluteTime: 1),
-            name: name, executable: nil, parentPID: 1, userID: getuid(),
+            key: ProcessKey(pid: pid, startAbsoluteTime: 1),
+            name: name, executable: nil, parentPID: 1, userID: userID ?? getuid(),
             groupID: ApplicationGroupID(bundle: "com.example.\(name)"),
             groupDisplayName: name, groupingReason: .bundleOwnership,
             bundleURL: nil, isPrincipalProcess: true
@@ -33,7 +34,11 @@ struct InsightEngineTests {
         )
     }
 
-    private func snapshot(_ groups: [ApplicationGroup]) -> SamplerSnapshot {
+    private func snapshot(
+        _ groups: [ApplicationGroup],
+        assertions: [SleepAssertionCollector.Assertion]? = nil,
+        displayAsleep: Bool = false
+    ) -> SamplerSnapshot {
         SamplerSnapshot(
             sessionID: SampleSessionID(), groups: groups,
             coverage: EnergyCoverage(groups: groups, accessibleEnergyNJ: 1_000_000, inaccessibleProcessCount: 0),
@@ -45,7 +50,8 @@ struct InsightEngineTests {
             capabilities: CapabilitySet(statuses: [:], osBuild: "t", hardwareModel: "t",
                                         logicalProcessorCount: 8, hasBattery: true),
             mode: .foreground, cycleDuration: .milliseconds(30),
-            skippedCycles: 0, isFirstSample: false
+            skippedCycles: 0, isFirstSample: false,
+            sleepAssertions: assertions, displayIsAsleep: displayAsleep
         )
     }
 
@@ -156,10 +162,14 @@ struct InsightEngineTests {
         #expect(!raised.contains { $0.rule == .sustainedEnergy })
     }
 
-    @Test("Sleep prevention stays gated until it can be evidenced")
-    func sleepPreventionGated() {
-        // Section 5.9: specified, but no validated assertion source yet.
-        #expect(InsightRule.sleepPrevention.isAvailable == false)
+    @Test("Every rule has a validated source")
+    func everyRuleIsEvidenced() {
+        // Section 5.9's gate was lifted once IOPMCopyAssertionsByProcess proved to be
+        // a supported, unprivileged, pid-attributed source. Whether a given Mac can
+        // actually supply each signal is the capability probe's call at runtime, not
+        // a compile-time property of the rule.
+        let unavailable = InsightRule.allCases.filter { !$0.isAvailable }
+        #expect(unavailable.isEmpty)
     }
 
     @Test("Every insight carries the numbers that justify it")
@@ -229,6 +239,106 @@ struct InsightEngineTests {
         #expect(state.activeInsights.count == 1)
         // Measured power is the most direct statement of cost, so it is the one shown.
         #expect(state.activeInsights.first?.rule == .sustainedEnergy)
+    }
+
+    // MARK: - Section 5.9 sleep prevention
+
+    private func assertion(pid: pid_t, name: String = "video call in progress")
+        -> SleepAssertionCollector.Assertion {
+        .init(pid: pid, kind: .systemSleep, name: name)
+    }
+
+    /// The case the rule exists for: an app still holding the machine awake after
+    /// the screen has gone dark, which is what empties a battery in a closed bag.
+    @Test("An app holding an assertion with the screen off is named")
+    func assertionWithScreenOffFires() {
+        let engine = InsightEngine()
+        var state = InsightEngine.State()
+        let now = Date()
+        let snap = snapshot(
+            [group(name: "Zoom", watts: 0, pid: 42)],
+            assertions: [assertion(pid: 42)], displayAsleep: true)
+
+        _ = engine.evaluate(snapshot: snap, foregroundGroupIDs: [], state: &state, now: now)
+        // Past the rule's five-minute window.
+        let raised = engine.evaluate(snapshot: snap, foregroundGroupIDs: [], state: &state,
+                                     now: now.addingTimeInterval(400))
+
+        let sleep = raised.first { $0.rule == .sleepPrevention }
+        #expect(sleep?.appName == "Zoom")
+        // The system's own words for the assertion travel with the claim.
+        #expect(sleep?.evidence.contains("video call in progress") == true)
+    }
+
+    /// An assertion held while the user is working is the feature working. Firing
+    /// here would make the rule noise during every video call.
+    @Test("An assertion while the screen is on is not an insight")
+    func assertionWithScreenOnStaysSilent() {
+        let engine = InsightEngine()
+        var state = InsightEngine.State()
+        let now = Date()
+        let snap = snapshot(
+            [group(name: "Zoom", watts: 0, pid: 42)],
+            assertions: [assertion(pid: 42)], displayAsleep: false)
+
+        _ = engine.evaluate(snapshot: snap, foregroundGroupIDs: [], state: &state, now: now)
+        let raised = engine.evaluate(snapshot: snap, foregroundGroupIDs: [], state: &state,
+                                     now: now.addingTimeInterval(400))
+
+        #expect(raised.allSatisfy { $0.rule != .sleepPrevention })
+    }
+
+    /// powerd holds an assertion whenever the display is on. Blaming macOS for macOS
+    /// is noise the user can do nothing about.
+    @Test("A system-owned process is never blamed for keeping the Mac awake")
+    func systemProcessIsNotBlamed() {
+        let engine = InsightEngine()
+        var state = InsightEngine.State()
+        let now = Date()
+        let snap = snapshot(
+            [group(name: "powerd", watts: 0, pid: 355, userID: 0)],
+            assertions: [assertion(pid: 355, name: "Prevent sleep while display is on")],
+            displayAsleep: true)
+
+        _ = engine.evaluate(snapshot: snap, foregroundGroupIDs: [], state: &state, now: now)
+        let raised = engine.evaluate(snapshot: snap, foregroundGroupIDs: [], state: &state,
+                                     now: now.addingTimeInterval(400))
+
+        #expect(raised.allSatisfy { $0.rule != .sleepPrevention })
+    }
+
+    /// Section 4: an unreadable interface is unknown, not "nothing is holding one".
+    @Test("An unreadable assertion source raises nothing")
+    func unreadableAssertionsRaiseNothing() {
+        let engine = InsightEngine()
+        var state = InsightEngine.State()
+        let now = Date()
+        let snap = snapshot([group(name: "Zoom", watts: 0, pid: 42)],
+                            assertions: nil, displayAsleep: true)
+
+        _ = engine.evaluate(snapshot: snap, foregroundGroupIDs: [], state: &state, now: now)
+        let raised = engine.evaluate(snapshot: snap, foregroundGroupIDs: [], state: &state,
+                                     now: now.addingTimeInterval(400))
+
+        #expect(raised.allSatisfy { $0.rule != .sleepPrevention })
+    }
+
+    /// A brief assertion around finishing a task is normal; the rule waits.
+    @Test("A short-lived assertion does not raise an insight")
+    func briefAssertionDoesNotFire() {
+        let engine = InsightEngine()
+        var state = InsightEngine.State()
+        let now = Date()
+        let snap = snapshot(
+            [group(name: "Handbrake", watts: 0, pid: 42)],
+            assertions: [assertion(pid: 42)], displayAsleep: true)
+
+        _ = engine.evaluate(snapshot: snap, foregroundGroupIDs: [], state: &state, now: now)
+        // Two minutes: well short of the five the rule requires.
+        let raised = engine.evaluate(snapshot: snap, foregroundGroupIDs: [], state: &state,
+                                     now: now.addingTimeInterval(120))
+
+        #expect(raised.allSatisfy { $0.rule != .sleepPrevention })
     }
 
     @Test("A heavy workload raises many insights at once")

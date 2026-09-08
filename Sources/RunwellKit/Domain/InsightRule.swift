@@ -10,8 +10,9 @@ public enum InsightRule: String, Sendable, CaseIterable, Codable {
     case hiddenBackgroundLoad
     case memoryPressure
     case wakeupStorm
-    /// Section 5.9 / 8.3: kept out of the MVP until a supported assertion source can
-    /// be mapped to an application without parsing privileged command output.
+    /// Section 5.9 / 8.3. Enabled once IOPMCopyAssertionsByProcess proved to be a
+    /// supported, unprivileged source that attributes assertions to a pid, which is
+    /// the condition the specification set for shipping this rule.
     case sleepPrevention
 
     /// How long the condition must hold before the insight is raised (Section 8.3).
@@ -21,7 +22,9 @@ public enum InsightRule: String, Sendable, CaseIterable, Codable {
         case .hiddenBackgroundLoad: 120
         case .memoryPressure: 60
         case .wakeupStorm: 60
-        case .sleepPrevention: 0
+        // Long, on purpose. A brief assertion around finishing a task is normal;
+        // what matters is one still held minutes after the screen went dark.
+        case .sleepPrevention: 300
         }
     }
 
@@ -64,19 +67,23 @@ public enum InsightRule: String, Sendable, CaseIterable, Codable {
         }
     }
 
-    /// Section 5.9: this rule is specified but cannot yet be evidenced honestly.
-    public var isAvailable: Bool { self != .sleepPrevention }
+    /// Every rule now has a validated source. Availability on a given Mac is decided
+    /// by the capability probe at runtime, not here.
+    public var isAvailable: Bool { true }
 
     /// Which story about an app is worth telling when several rules fire at once.
     /// One app must produce one row: measured power is the most direct statement of
     /// battery cost, so it outranks the proxies that merely predict it.
     public var priority: Int {
         switch self {
-        case .sustainedEnergy: 4
+        case .sustainedEnergy: 5
+        // Above the proxies: an app holding the machine awake is a concrete,
+        // actionable cause, and the one the user can do something about. Below
+        // measured power, which is the more direct statement of battery cost.
+        case .sleepPrevention: 4
         case .hiddenBackgroundLoad: 3
         case .memoryPressure: 2
         case .wakeupStorm: 1
-        case .sleepPrevention: 0
         }
     }
 }

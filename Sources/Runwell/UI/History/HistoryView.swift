@@ -12,6 +12,7 @@ struct HistoryView: View {
     @State private var battery: [HistoryStore.BatteryPoint] = []
     @State private var breakdown: HistoryStore.EnergyBreakdown?
     @State private var sessions: [HistoryStore.BatterySession] = []
+    @State private var episodes: [HistoryStore.InsightEpisode] = []
     @State private var isLoading = true
 
     /// One plotted battery reading. A named type rather than a tuple: the chart
@@ -59,6 +60,7 @@ struct HistoryView: View {
                     rangePicker
                     batteryChart
                     consumersSection
+                    episodesSection
                     sessionsSection
                     footnote
                 }
@@ -85,6 +87,7 @@ struct HistoryView: View {
         breakdown = try? await store.energyBreakdown(
             from: from, to: to, granularity: range.granularity, limit: 8)
         sessions = (try? await store.batterySessions(from: from, to: to)) ?? []
+        episodes = (try? await store.insightHistory(from: from, to: to)) ?? []
         isLoading = false
     }
 
@@ -302,6 +305,74 @@ struct HistoryView: View {
             : ""
         return "Battery went from \(Int(first.percentage))% to "
             + "\(Int(last.percentage))% over \(range.rawValue).\(plugged)"
+    }
+
+    // MARK: - Insight episodes
+
+    /// Section 5.9 / 7.1. Conditions that held for a while, longest first.
+    ///
+    /// This is where an insight becomes useful rather than merely true. The
+    /// sleep-prevention rule fires while the display is dark and withdraws the
+    /// moment you wake the Mac, so the live list can never show you the episode you
+    /// actually care about — you were not looking when it happened. Duration is the
+    /// point: an app that held the machine awake for three hours is a different
+    /// story from one that did it for thirty seconds.
+    @ViewBuilder
+    private var episodesSection: some View {
+        if !episodes.isEmpty {
+            VStack(alignment: .leading, spacing: Theme.Spacing.row + 2) {
+                Text("What kept your Mac busy").font(.title3.weight(.semibold))
+
+                VStack(alignment: .leading, spacing: Theme.Spacing.row) {
+                    ForEach(episodes) { episode in
+                        episodeRow(episode)
+                    }
+                }
+            }
+        }
+    }
+
+    private func episodeRow(_ episode: HistoryStore.InsightEpisode) -> some View {
+        HStack(alignment: .top, spacing: Theme.Spacing.card) {
+            // Section 8.5: symbol and words, never colour alone.
+            Image(systemName: episode.rule.symbolName)
+                .foregroundStyle(episode.severity == .warning ? .orange : .secondary)
+                .frame(width: 18)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(episode.rule.message(for: episode.appName))
+                    .fontWeight(.medium)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(episodeTiming(episode))
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+
+            if episode.ended == nil {
+                // A condition that has not lapsed is still happening now.
+                Text("Now")
+                    .font(.caption)
+                    .padding(.horizontal, Theme.Spacing.row)
+                    .padding(.vertical, 2)
+                    .background(.quaternary, in: Capsule())
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .cardSurface()
+        .accessibilityElement(children: .combine)
+    }
+
+    /// When it happened and for how long, in the order a person would say it.
+    private func episodeTiming(_ episode: HistoryStore.InsightEpisode) -> String {
+        let duration = durationText(episode.duration())
+        let start = episode.started.formatted(date: .omitted, time: .shortened)
+        guard let ended = episode.ended else {
+            return "Started at \(start) — \(duration) so far"
+        }
+        let finish = ended.formatted(date: .omitted, time: .shortened)
+        return "\(start) to \(finish) — \(duration)"
     }
 
     // MARK: - Sessions

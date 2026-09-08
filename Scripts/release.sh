@@ -8,14 +8,14 @@
 #   1. Apple Developer Program membership ($99/yr)
 #   2. A "Developer ID Application" certificate in your login keychain
 #   3. A notarytool keychain profile, created once with:
-#        xcrun notarytool store-credentials powertask-notary \
-#          --apple-id you@example.com --team-id TEAMID --password APP-SPECIFIC-PASSWORD
+#        xcrun notarytool store-credentials runwell-notary \
+#          --apple-id you@example.com --team-id 728Q4KSP8P --password APP-SPECIFIC-PASSWORD
 #
 # Usage: Scripts/release.sh "Developer ID Application: Your Name (TEAMID)"
 set -euo pipefail
 
 IDENTITY="${1:-}"
-PROFILE="${2:-powertask-notary}"
+PROFILE="${2:-runwell-notary}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP="$ROOT/build/Runwell.app"
 DMG="$ROOT/build/Runwell.dmg"

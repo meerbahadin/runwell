@@ -118,37 +118,34 @@ struct ProcessDetailView: View {
     private var metricsGrid: some View {
         Grid(alignment: .leading, horizontalSpacing: 24, verticalSpacing: 10) {
             GridRow {
-                metricCell("Energy", MetricText(metric: group.totalEnergyWatts, format: "%.2f", suffix: " W"),
-                           provenance: group.totalEnergyWatts.provenance)
-                metricCell("CPU", MetricText(metric: group.totalCPUPercent, format: "%.1f", suffix: "%"),
-                           provenance: group.totalCPUPercent.provenance)
+                metricCell("Energy", MetricText(metric: group.totalEnergyWatts, format: "%.2f", suffix: " W"))
+                metricCell("CPU", MetricText(metric: group.totalCPUPercent, format: "%.1f", suffix: "%"))
             }
             GridRow {
-                metricCell("Memory", MemoryText(metric: group.totalFootprintBytes),
-                           provenance: group.totalFootprintBytes.provenance)
+                metricCell("Memory", MemoryText(metric: group.totalFootprintBytes))
                 metricCell("Disk", MetricText(metric: group.totalDiskBytesPerSecond.map { $0 / 1_048_576 },
-                                              format: "%.2f", suffix: " MB/s"),
-                           provenance: group.totalDiskBytesPerSecond.provenance)
+                                              format: "%.2f", suffix: " MB/s"))
             }
             if let share = environment.snapshot?.coverage.measuredAppShare(of: group) {
                 GridRow {
                     // Section 3.1: this exact wording, never "battery percentage used".
                     metricCell(EnergyCoverage.shareLabel,
-                               MetricText(metric: share.map { $0 * 100 }, format: "%.1f", suffix: "%"),
-                               provenance: share.provenance)
+                               MetricText(metric: share.map { $0 * 100 }, format: "%.1f", suffix: "%"))
                         .gridCellColumns(2)
                 }
             }
         }
     }
 
-    private func metricCell(_ title: String, _ content: some View, provenance: MetricProvenance) -> some View {
+    private func metricCell(_ title: String, _ content: some View) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(title).font(.caption).foregroundStyle(.secondary)
-            HStack(spacing: 6) {
-                content.font(.title3)
-                ProvenanceBadge(provenance: provenance, compact: true)
-            }
+            // The badge beside every number was more clutter than information: it
+            // repeated on each cell and said "Derived" about values that are always
+            // derived. Provenance still governs what is shown — an unavailable
+            // reading is an em dash, never a zero — and Diagnostics reports each
+            // collector's provenance in full.
+            content.font(.title3)
         }
     }
 

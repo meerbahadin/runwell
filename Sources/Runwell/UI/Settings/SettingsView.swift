@@ -23,6 +23,8 @@ struct SettingsView: View {
                 alerts(environment: environment)
                 Divider()
                 privacy
+                Divider()
+                about(environment: environment)
             }
             .padding(20)
             .frame(maxWidth: 720, alignment: .leading)
@@ -163,6 +165,20 @@ struct SettingsView: View {
 
             Button("Delete All History…", role: .destructive) { confirmingClear = true }
                 .disabled(environment.history == nil)
+        }
+    }
+
+    // MARK: - About
+
+    private func about(environment: AppEnvironment) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("About").font(.headline)
+            Button("Show the introduction again") {
+                environment.hasCompletedOnboarding = false
+            }
+            Text("Explains what Runwell measures, and what this Mac can report.")
+                .font(.callout).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 

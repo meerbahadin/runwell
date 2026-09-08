@@ -13,6 +13,7 @@ public enum Collector: String, Sendable, CaseIterable {
     case processWakeups
     case battery
     case memoryPressure
+    case sleepAssertions
     case totalGPU
     case perProcessGPU
 
@@ -26,6 +27,7 @@ public enum Collector: String, Sendable, CaseIterable {
         case .processWakeups: "Wakeups"
         case .battery: "Battery"
         case .memoryPressure: "Memory pressure"
+        case .sleepAssertions: "Sleep prevention"
         case .totalGPU: "Total GPU"
         case .perProcessGPU: "Per-process GPU"
         }
@@ -130,6 +132,14 @@ public struct CapabilityProbe: Sendable {
         record(.memoryPressure, pressure,
                pressure ? "Reading the kernel memory pressure level."
                         : "kern.memorystatus_vm_pressure_level is unreadable on this system.",
+               .measured)
+
+        // Section 5.9: sleep assertions, via the documented IOKit interface rather
+        // than the text output of pmset.
+        let assertions = SleepAssertionCollector().isAvailable()
+        record(.sleepAssertions, assertions,
+               assertions ? "Reading power assertions by process."
+                          : "The power-assertion interface did not answer.",
                .measured)
 
         // Section 5.7 GPU feasibility gate. Per-process GPU stays off until a

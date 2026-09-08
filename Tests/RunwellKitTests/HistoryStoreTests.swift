@@ -58,6 +58,59 @@ struct HistoryStoreTests {
         )
     }
 
+    // MARK: - Section 7.1 insight persistence
+
+    private func insight(
+        _ rule: InsightRule, app: String, at started: Date,
+        severity: InsightSeverity = .warning
+    ) -> Insight {
+        Insight(rule: rule, appGroupID: ApplicationGroupID(bundle: "com.example.\(app)"),
+                appName: app, startedAt: started, severity: severity,
+                evidence: "Drawing 18.0 W.")
+    }
+
+    /// The table existed from the first migration but nothing wrote to it, so every
+    /// condition vanished when it scrolled off screen.
+    @Test("A raised insight is stored and read back with its duration")
+    func insightPersisted() async throws {
+        let url = temporaryURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let store = try HistoryStore(url: url)
+
+        let started = Date().addingTimeInterval(-3600)
+        try await store.recordInsightsRaised([insight(.sustainedEnergy, app: "Chrome", at: started)])
+        // The condition lapses an hour later.
+        try await store.closeInsights(stillOpen: [], at: started.addingTimeInterval(3600))
+
+        let episodes = try await store.insightHistory(
+            from: started.addingTimeInterval(-60), to: Date())
+        #expect(episodes.count == 1)
+        #expect(episodes.first?.appName == "Chrome")
+        #expect(episodes.first?.ended != nil)
+        #expect(episodes.first.map { $0.duration() == 3600 } == true)
+    }
+
+    /// A condition that stays true is one episode, not one per cycle: the engine
+    /// re-reports a live insight on every evaluation.
+    @Test("Re-raising a live condition does not start a second episode")
+    func liveConditionIsOneEpisode() async throws {
+        let url = temporaryURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let store = try HistoryStore(url: url)
+
+        let started = Date().addingTimeInterval(-600)
+        let live = insight(.sustainedEnergy, app: "Chrome", at: started)
+        for _ in 0..<5 {
+            try await store.recordInsightsRaised([live])
+        }
+
+        let episodes = try await store.insightHistory(
+            from: started.addingTimeInterval(-60), to: Date())
+        #expect(episodes.count == 1)
+        // Still open, so it has no end yet.
+        #expect(episodes.first?.ended == nil)
+    }
+
     @Test("Samples accumulate into buckets and read back")
     func writeAndRead() async throws {
         let url = temporaryURL()

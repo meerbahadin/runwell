@@ -17,6 +17,8 @@ struct DiagnosticsView: View {
                 Divider()
                 sampling
                 Divider()
+                sleepAssertions
+                Divider()
                 actions
             }
             .padding(20)
@@ -118,6 +120,23 @@ struct DiagnosticsView: View {
         }
     }
 
+    /// Section 5.9. What is holding the machine awake right now, and whether the
+    /// rule would act on it.
+    ///
+    /// The sleep-prevention rule only fires once the display has been asleep for
+    /// five minutes, which is precisely when nobody can watch it happen. This panel
+    /// makes the rule's inputs inspectable while the screen is on, so its behaviour
+    /// can be checked without having to catch it in the act.
+    private var sleepAssertions: some View {
+        // The snapshot's own groups, not `environment.groups`: that one is the
+        // table's view of the world, narrowed by the search field and re-sorted.
+        // A diagnostic must not change with what is typed in a search box.
+        SleepAssertionPanel(
+            groups: environment.snapshot?.groups ?? [],
+            actions: environment.actions
+        )
+    }
+
     private var actions: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Report").font(.headline)
@@ -155,5 +174,170 @@ struct DiagnosticsView: View {
             lines.append("Sampler: \(snapshot.mode.description), \(snapshot.groups.count) groups, \(snapshot.skippedCycles) skipped cycles")
         }
         return lines.joined(separator: "\n")
+    }
+}
+
+/// Live view of the sleep-prevention rule's inputs. Extracted from the diagnostics
+/// body so the list has its own type context: a `ForEach` over a locally-bound array
+/// inside a large `@ViewBuilder` resolved to the `Binding` overload instead.
+struct SleepAssertionPanel: View {
+    let groups: [ApplicationGroup]
+    let actions: ProcessActionService
+
+    private let collector = SleepAssertionCollector()
+
+    @State private var confirming: SleepAssertionCollector.Assertion?
+    @State private var outcome: String?
+
+    var body: some View {
+        let displayAsleep = collector.displayIsAsleep()
+        let captured = collector.capture()
+
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Sleep prevention").font(.headline)
+
+            if let captured {
+                let sleepers = captured.filter { $0.kind.isSystemLevel }
+
+                Text(displayAsleep
+                     ? "The display is off, so these are being judged."
+                     : "The display is on, so none of these count yet — an app keeping the Mac awake while you are using it is not a problem.")
+                    .font(.callout).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if sleepers.isEmpty {
+                    Text("Nothing is preventing sleep.")
+                        .font(.callout).foregroundStyle(.secondary)
+                } else {
+                    ForEach(sleepers) { assertion in
+                        row(for: assertion, displayAsleep: displayAsleep)
+                    }
+                }
+            } else {
+                // Section 4: unreadable is unknown, not "nothing".
+                Text("The power-assertion interface did not answer, so Runwell cannot tell.")
+                    .font(.callout).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if let outcome {
+                Text(outcome)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .confirmationDialog(
+            confirming.map { "Quit \(displayName(for: $0, member: memberProcess(for: $0)))?" } ?? "",
+            isPresented: Binding(
+                get: { confirming != nil },
+                set: { if !$0 { confirming = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Quit", role: .destructive) {
+                if let assertion = confirming { quit(assertion, force: false) }
+                confirming = nil
+            }
+            // Section 8.4: force quit is never the default, but a process that
+            // ignores a polite request is exactly the case this panel exists for —
+            // caffeinate and its kind do not respond to a terminate.
+            Button("Force Quit", role: .destructive) {
+                if let assertion = confirming { quit(assertion, force: true) }
+                confirming = nil
+            }
+            Button("Cancel", role: .cancel) { confirming = nil }
+        } message: {
+            Text("Quit asks the process to stop and may be ignored. Force Quit ends it immediately — unsaved work will be lost.")
+        }
+    }
+
+    /// Ends the process, and says plainly what happened either way.
+    private func quit(_ assertion: SleepAssertionCollector.Assertion, force: Bool) {
+        guard let member = memberProcess(for: assertion) else {
+            outcome = "That process is no longer running."
+            return
+        }
+        let name = member.identity.groupDisplayName
+        let result = force
+            ? actions.forceQuit(identity: member.identity, userConfirmed: true)
+            : actions.quit(identity: member.identity)
+        switch result {
+        case .success:
+            outcome = force
+                ? "Force quit \(name)."
+                : "Asked \(name) to quit. If it keeps holding the assertion, use Force Quit."
+        case .failure(let error):
+            // A refusal is reported, never swallowed: the policy exists for reasons
+            // the user should be able to read.
+            outcome = "Could not quit: \(error.localizedDescription)"
+        }
+    }
+
+    private func row(
+        for assertion: SleepAssertionCollector.Assertion, displayAsleep: Bool
+    ) -> some View {
+        let member = memberProcess(for: assertion)
+        // Root-owned daemons like powerd are not in the application groups at all,
+        // so an absent owner is itself evidence that this is a system process
+        // rather than something the user launched.
+        let isSystem = member.map { $0.identity.userID == 0 } ?? true
+        let flagged = !isSystem && displayAsleep
+        let protection = member.map { actions.protection(for: $0.identity) }
+        let canQuit = protection.map { !$0.isBlocked } ?? false
+
+        return HStack(alignment: .top, spacing: 10) {
+            Image(systemName: isSystem ? "gearshape.fill" : "eye.fill")
+                .foregroundStyle(flagged ? .orange : .secondary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(displayName(for: assertion, member: member))
+                    .fontWeight(.medium)
+                Text(assertion.name)
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(verdict(isSystem: isSystem, displayAsleep: displayAsleep))
+                    .font(.caption)
+                    .foregroundStyle(flagged ? .orange : .secondary)
+            }
+            Spacer(minLength: 0)
+
+            // The whole point of naming the culprit is being able to stop it. The
+            // protection policy still decides: a system daemon offers no button.
+            if canQuit {
+                Button("Quit") { confirming = assertion }
+                    .font(.caption)
+                    .help("Quits this process so it stops holding the Mac awake.")
+            }
+        }
+    }
+
+    /// The process behind an assertion, if it belongs to an application group.
+    private func memberProcess(
+        for assertion: SleepAssertionCollector.Assertion
+    ) -> ProcessIntervalMetrics? {
+        for group in groups {
+            if let match = group.members.first(where: { $0.key.pid == assertion.pid }) {
+                return match
+            }
+        }
+        return nil
+    }
+
+    /// A name a person can act on. "pid 355" tells nobody anything, so an unmatched
+    /// assertion falls back to the process name the system reported with it.
+    private func displayName(
+        for assertion: SleepAssertionCollector.Assertion,
+        member: ProcessIntervalMetrics?
+    ) -> String {
+        if let member {
+            return member.identity.groupDisplayName
+        }
+        return "System process (pid \(assertion.pid))"
+    }
+
+    private func verdict(isSystem: Bool, displayAsleep: Bool) -> String {
+        if isSystem { return "Ignored: this is a system process." }
+        if !displayAsleep { return "Ignored while the display is on." }
+        return "Would be reported after five minutes."
     }
 }

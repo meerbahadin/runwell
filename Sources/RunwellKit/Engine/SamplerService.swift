@@ -51,6 +51,10 @@ public struct SamplerSnapshot: Sendable {
     public let cycleDuration: Duration
     public let skippedCycles: Int
     public let isFirstSample: Bool
+    /// Section 5.9: processes preventing sleep, and whether the display is dark.
+    /// Nil when the interface could not be read — unknown, not "none".
+    public let sleepAssertions: [SleepAssertionCollector.Assertion]?
+    public let displayIsAsleep: Bool
 
     public init(
         sessionID: SampleSessionID,
@@ -61,7 +65,9 @@ public struct SamplerSnapshot: Sendable {
         mode: SamplingMode,
         cycleDuration: Duration,
         skippedCycles: Int,
-        isFirstSample: Bool
+        isFirstSample: Bool,
+        sleepAssertions: [SleepAssertionCollector.Assertion]? = nil,
+        displayIsAsleep: Bool = false
     ) {
         self.sessionID = sessionID
         self.groups = groups
@@ -72,6 +78,8 @@ public struct SamplerSnapshot: Sendable {
         self.cycleDuration = cycleDuration
         self.skippedCycles = skippedCycles
         self.isFirstSample = isFirstSample
+        self.sleepAssertions = sleepAssertions
+        self.displayIsAsleep = displayIsAsleep
     }
 }
 
@@ -100,6 +108,8 @@ public actor SamplerService {
 
     private var continuation: AsyncStream<SamplerSnapshot>.Continuation?
     public nonisolated let snapshots: AsyncStream<SamplerSnapshot>
+
+    private let sleepAssertionCollector = SleepAssertionCollector()
 
     public init(capabilities: CapabilitySet) {
         self.capabilities = capabilities
@@ -157,6 +167,11 @@ public actor SamplerService {
 
         let capture = processCollector.capture()
         let battery = batteryCollector.capture()
+        // Section 5.9. Cheap to read, and only meaningful together with whether the
+        // display is dark, so both are captured in the same cycle.
+        let assertions = capabilities.isAvailable(.sleepAssertions)
+            ? sleepAssertionCollector.capture() : nil
+        let displayAsleep = sleepAssertionCollector.displayIsAsleep()
 
         var metrics: [ProcessIntervalMetrics] = []
         metrics.reserveCapacity(capture.snapshots.count)
@@ -213,7 +228,9 @@ public actor SamplerService {
             mode: mode,
             cycleDuration: duration,
             skippedCycles: skippedCycles,
-            isFirstSample: isFirst
+            isFirstSample: isFirst,
+            sleepAssertions: assertions,
+            displayIsAsleep: displayAsleep
         ))
     }
 

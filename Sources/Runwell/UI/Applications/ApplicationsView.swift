@@ -119,13 +119,22 @@ struct ApplicationRow: View {
                     Text(group.displayName)
                         .lineLimit(1)
                         .truncationMode(.middle)
+                        // The name is what the row is for: let the badge give up
+                        // space first, rather than truncating "Google Chrome" to
+                        // "Goo…hrome" so a count can sit beside it.
+                        .layoutPriority(1)
 
                     if group.processCount > 1 {
-                        // A bare number in a capsule read as a mystery: it needed a
-                        // hover to say what it counted. The unit is now on the badge.
-                        Text("\(group.processCount) processes")
+                        // Spelling out "processes" wrapped the capsule onto two
+                        // lines in a narrow column and squeezed the name beside it.
+                        // The count alone, with an icon that says what is being
+                        // counted, fits and still reads.
+                        Label("\(group.processCount)", systemImage: "square.stack.3d.up")
+                            .labelStyle(.titleAndIcon)
                             .font(.caption)
                             .monospacedDigit()
+                            .lineLimit(1)
+                            .fixedSize()
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
                             .background(.quaternary, in: Capsule())
@@ -135,6 +144,11 @@ struct ApplicationRow: View {
                             // the tooltip mostly refused to appear. contentShape
                             // makes the whole capsule the hover target.
                             .contentShape(Capsule())
+                            // The row above installs its own contentShape for the
+                            // selection tap, which sits over the badge in hit-test
+                            // order and swallowed the hover the tooltip needs. An
+                            // explicit hover region on the badge claims it back.
+                            .onHover { _ in }
                             .help("This application is running \(group.processCount) processes. Expand the row to see them.")
                             .accessibilityLabel("\(group.processCount) processes")
                     }

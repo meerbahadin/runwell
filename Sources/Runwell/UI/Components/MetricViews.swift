@@ -42,15 +42,24 @@ struct ProvenanceBadge: View {
 
     var body: some View {
         Label {
-            Text(compact ? String(provenance.badge.prefix(1)) : provenance.badge)
+            // A single letter said nothing — "f(x) D" reads as noise beside a
+            // number, and "E" cannot distinguish Estimated from Experimental. The
+            // compact form drops the icon instead of the word: Section 8.5 forbids
+            // colour *alone*, and the word satisfies that on its own, where a
+            // lone initial does not.
+            Text(provenance.badge)
         } icon: {
-            Image(systemName: symbol)
+            if !compact { Image(systemName: symbol) }
         }
         .font(.caption2)
         .padding(.horizontal, compact ? 4 : 6)
         .padding(.vertical, 2)
         .background(tint.opacity(0.15), in: Capsule())
         .foregroundStyle(tint)
+        // Without an explicit shape the hover region is only the glyphs, so the
+        // capsule's padding is dead space and the tooltip mostly refuses to open.
+        .contentShape(Capsule())
+        .onHover { _ in }
         .help(provenance.explanation)
         .accessibilityLabel("\(provenance.badge). \(provenance.explanation)")
     }

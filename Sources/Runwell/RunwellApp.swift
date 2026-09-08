@@ -19,6 +19,20 @@ struct RunwellApp: App {
             RootView()
                 .environment(environment)
                 .frame(minWidth: 820, minHeight: 520)
+                // A sheet rather than a separate window: collection starts
+                // underneath, so by the time the introduction is dismissed the first
+                // interval has already elapsed and the app is not empty.
+                .sheet(isPresented: Binding(
+                    get: { !environment.hasCompletedOnboarding },
+                    set: { if !$0 { environment.hasCompletedOnboarding = true } }
+                )) {
+                    OnboardingView(capabilities: environment.capabilities) {
+                        environment.hasCompletedOnboarding = true
+                    }
+                    // The introduction explains the app; dismissing it by clicking
+                    // away would skip that, so it is finished with the button.
+                    .interactiveDismissDisabled()
+                }
                 .task {
                     environment.start()
                     if background == nil {
