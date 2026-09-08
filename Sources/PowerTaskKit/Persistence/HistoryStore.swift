@@ -172,7 +172,34 @@ public actor HistoryStore {
         public let averageCPUPercent: Double
         public let peakMemoryBytes: UInt64
         public let confidence: Double
+        /// Seconds this application was actually observed, from its sample count —
+        /// not the length of the window, since an app may have started partway in.
+        public let observedSeconds: Double
+
         public var energyJoules: Double { Double(energyNJ) / 1_000_000_000 }
+
+        /// Average power while the app was observed. Watts are the one energy unit
+        /// people already read off appliances, so this is the number the UI leads
+        /// with rather than a joule total that means nothing without a duration.
+        public var averageWatts: Double {
+            guard observedSeconds > 0 else { return 0 }
+            return energyJoules / observedSeconds
+        }
+    }
+
+    /// A window of history with each application's share of it. Section 3.1: the
+    /// denominator is what PowerTask could measure, never the battery pack, so the
+    /// share must be presented as a share of measured application energy.
+    public struct EnergyBreakdown: Sendable {
+        public let rows: [BucketRow]
+        public let totalEnergyNJ: UInt64
+        public let windowSeconds: Double
+
+        /// This application's portion of all measured application energy.
+        public func share(of row: BucketRow) -> Double {
+            guard totalEnergyNJ > 0 else { return 0 }
+            return Double(row.energyNJ) / Double(totalEnergyNJ)
+        }
     }
 
     /// Total measured energy per application between two dates, biggest first.
@@ -184,7 +211,8 @@ public actor HistoryStore {
         try database.prepare("""
             SELECT b.app_group_id, g.display_name, MIN(b.bucket_start),
                    SUM(b.energy_nj_sum), AVG(b.cpu_percent_sum / b.sample_count),
-                   MAX(b.memory_bytes_max), AVG(b.coverage_confidence)
+                   MAX(b.memory_bytes_max), AVG(b.coverage_confidence),
+                   SUM(b.sample_count)
             FROM bucket b
             JOIN app_group g ON g.id = b.app_group_id
             WHERE b.granularity = ? AND b.bucket_start >= ? AND b.bucket_start < ?
@@ -197,6 +225,9 @@ public actor HistoryStore {
             .bind(3, Int64(to.timeIntervalSince1970))
             .bind(4, Int64(limit))
             .query { row in
+                // Each sample covers one collection interval; the bucket tier says
+                // which. This is how long the app was actually watched.
+                let sampleCount = Double(max(0, row.int(7)))
                 rows.append(BucketRow(
                     id: row.string(0),
                     displayName: row.string(1),
@@ -204,10 +235,35 @@ public actor HistoryStore {
                     energyNJ: UInt64(max(0, row.int(3))),
                     averageCPUPercent: row.double(4),
                     peakMemoryBytes: UInt64(max(0, row.int(5))),
-                    confidence: row.double(6)
+                    confidence: row.double(6),
+                    observedSeconds: sampleCount * 2
                 ))
             }
         return rows
+    }
+
+    /// Top consumers plus the total they are a share of. The total covers every
+    /// application in the window, not just the ones returned, so a share is never
+    /// inflated by the display limit.
+    public func energyBreakdown(
+        from: Date, to: Date, granularity: String = "1m", limit: Int = 12
+    ) throws -> EnergyBreakdown {
+        let rows = try topEnergyConsumers(from: from, to: to, granularity: granularity, limit: limit)
+        var total: Int64 = 0
+        try database.prepare("""
+            SELECT SUM(energy_nj_sum) FROM bucket
+            WHERE granularity = ? AND bucket_start >= ? AND bucket_start < ?
+            """)
+            .bind(1, granularity)
+            .bind(2, Int64(from.timeIntervalSince1970))
+            .bind(3, Int64(to.timeIntervalSince1970))
+            .query { if !$0.isNull(0) { total = $0.int(0) } }
+
+        return EnergyBreakdown(
+            rows: rows,
+            totalEnergyNJ: UInt64(max(0, total)),
+            windowSeconds: to.timeIntervalSince(from)
+        )
     }
 
     /// A battery reading for the History chart.

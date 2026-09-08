@@ -10,7 +10,7 @@ struct HistoryView: View {
 
     @State private var range: Range = .sixHours
     @State private var battery: [HistoryStore.BatteryPoint] = []
-    @State private var consumers: [HistoryStore.BucketRow] = []
+    @State private var breakdown: HistoryStore.EnergyBreakdown?
     @State private var sessions: [HistoryStore.BatterySession] = []
     @State private var isLoading = true
 
@@ -41,14 +41,17 @@ struct HistoryView: View {
                     historyDisabled
                 } else if isLoading {
                     ProgressView().frame(maxWidth: .infinity)
-                } else if battery.isEmpty && consumers.isEmpty {
+                } else if battery.isEmpty && (breakdown?.rows.isEmpty ?? true) {
                     noDataYet
                 } else {
+                    headline
+                    Divider()
                     batteryChart
                     Divider()
-                    sessionsSection
-                    Divider()
                     consumersSection
+                    Divider()
+                    sessionsSection
+                    footnote
                 }
             }
             .padding(20)
@@ -78,8 +81,8 @@ struct HistoryView: View {
         let to = Date()
         let from = to.addingTimeInterval(-range.seconds)
         battery = (try? await store.batteryHistory(from: from, to: to)) ?? []
-        consumers = (try? await store.topEnergyConsumers(
-            from: from, to: to, granularity: range.granularity, limit: 12)) ?? []
+        breakdown = try? await store.energyBreakdown(
+            from: from, to: to, granularity: range.granularity, limit: 8)
         sessions = (try? await store.batterySessions(from: from, to: to)) ?? []
         isLoading = false
     }
@@ -102,12 +105,58 @@ struct HistoryView: View {
         }
     }
 
+    // MARK: - Headline
+
+    /// The plain-language answer, before any chart. Someone should be able to read
+    /// this one line and stop, without decoding a unit or a bar length.
+    @ViewBuilder
+    private var headline: some View {
+        let drop = batteryDrop
+        VStack(alignment: .leading, spacing: 6) {
+            if let top = breakdown?.rows.first, let share = breakdown?.share(of: top), share > 0 {
+                Text(headlineText(top: top, share: share, drop: drop))
+                    .font(.title3)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if let drop, drop > 0 {
+                Text("Your battery went down \(Int(drop))% in the last \(range.rawValue.lowercased()).")
+                    .font(.title3)
+            } else {
+                Text("Nothing has used a noticeable amount of energy in the last \(range.rawValue.lowercased()).")
+                    .font(.title3)
+            }
+        }
+    }
+
+    private func headlineText(top: HistoryStore.BucketRow, share: Double, drop: Double?) -> String {
+        let percent = Int((share * 100).rounded())
+        if let drop, drop > 0 {
+            return "Your battery went down \(Int(drop))% in the last \(range.rawValue.lowercased()). \(top.displayName) used the most energy of the apps we could measure — about \(percent)% of it."
+        }
+        return "\(top.displayName) used the most energy in the last \(range.rawValue.lowercased()) — about \(percent)% of everything we could measure."
+    }
+
+    /// Percentage points lost across the window, counting only time on battery so
+    /// that a charge in the middle does not read as negative use.
+    private var batteryDrop: Double? {
+        let discharging = battery.filter { $0.onBattery && !$0.isCharging }
+        guard let first = discharging.first?.percentage,
+              let last = discharging.last?.percentage, first > last else { return nil }
+        return first - last
+    }
+
     // MARK: - Battery
 
     @ViewBuilder
     private var batteryChart: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Battery level").font(.headline)
+            HStack(alignment: .firstTextBaseline) {
+                Text("Battery level").font(.headline)
+                Spacer()
+                if let drop = batteryDrop, drop > 0 {
+                    Text("Down \(Int(drop))%")
+                        .font(.callout).foregroundStyle(.secondary).monospacedDigit()
+                }
+            }
 
             let points = battery.compactMap { point -> (Date, Double, Bool)? in
                 guard let percentage = point.percentage else { return nil }
@@ -145,9 +194,9 @@ struct HistoryView: View {
     @ViewBuilder
     private var sessionsSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Battery sessions").font(.headline)
+            Text("Time on battery").font(.headline)
             if sessions.isEmpty {
-                Text("No time on battery in this range.")
+                Text("Your Mac has been plugged in for this whole period.")
                     .font(.callout).foregroundStyle(.secondary)
             } else {
                 ForEach(sessions) { session in
@@ -156,7 +205,7 @@ struct HistoryView: View {
                             .foregroundStyle(.secondary)
                         VStack(alignment: .leading, spacing: 2) {
                             Text("\(session.start.formatted(date: .omitted, time: .shortened)) – \(session.end.formatted(date: .omitted, time: .shortened))")
-                            Text("\(Int(session.percentageUsed))% used over \(durationText(session.duration))")
+                            Text(sessionSummary(session))
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                         Spacer()
@@ -173,48 +222,105 @@ struct HistoryView: View {
         return minutes >= 60 ? "\(minutes / 60)h \(minutes % 60)m" : "\(minutes)m"
     }
 
+    /// Reads as a sentence, and adds the rate only once there is enough of a run for
+    /// an extrapolation to mean anything.
+    private func sessionSummary(_ session: HistoryStore.BatterySession) -> String {
+        let used = Int(session.percentageUsed)
+        let duration = durationText(session.duration)
+        guard used > 0, session.duration >= 600 else {
+            return used > 0 ? "Used \(used)% over \(duration)" : "On battery for \(duration)"
+        }
+        let perHour = session.percentageUsed / (session.duration / 3600)
+        return "Used \(used)% over \(duration) — about \(Int(perHour))% per hour at that rate"
+    }
+
     // MARK: - Consumers
 
     @ViewBuilder
     private var consumersSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Measured energy by application").font(.headline)
-            // Section 3.1: this is a share of what PowerTask could measure, never a
-            // claim about the whole battery.
-            Text("Totals cover the processes PowerTask was allowed to read while it was running.")
-                .font(.caption).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 12) {
+            Text("What used the most energy").font(.headline)
 
-            if consumers.isEmpty {
-                Text("No measured energy in this range.")
-                    .font(.callout).foregroundStyle(.secondary)
+            if let breakdown, !breakdown.rows.isEmpty, breakdown.totalEnergyNJ > 0 {
+                ForEach(breakdown.rows) { row in
+                    consumerRow(row, share: breakdown.share(of: row))
+                }
             } else {
-                Chart(consumers) { row in
-                    BarMark(
-                        x: .value("Energy", row.energyJoules),
-                        y: .value("App", row.displayName)
-                    )
-                    .foregroundStyle(.blue.gradient)
-                }
-                .chartXAxisLabel("Joules")
-                .frame(height: CGFloat(consumers.count) * 28 + 40)
-
-                ForEach(consumers) { row in
-                    HStack {
-                        Text(row.displayName).lineLimit(1)
-                        Spacer()
-                        Text(String(format: "%.1f J", row.energyJoules))
-                            .monospacedDigit().foregroundStyle(.secondary)
-                        // Section 3: coverage confidence travels with the number.
-                        if row.confidence < 0.9 {
-                            Image(systemName: "exclamationmark.triangle")
-                                .font(.caption)
-                                .foregroundStyle(.orange)
-                                .help("Some processes in this group were not readable, so this total is partial.")
-                        }
-                    }
-                    .font(.callout)
-                }
+                Text("Nothing measurable yet.")
+                    .font(.callout).foregroundStyle(.secondary)
             }
         }
+    }
+
+    /// One app: name, share of measured energy as both a bar and a percentage, and a
+    /// familiar comparison. No joules — the unit meant nothing to most readers, and a
+    /// raw total is unreadable anyway without knowing the window it covers.
+    private func consumerRow(_ row: HistoryStore.BucketRow, share: Double) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(row.displayName).lineLimit(1)
+                if row.confidence < 0.7 {
+                    // Section 3: an incomplete total says so rather than passing as
+                    // whole. The threshold sits below the 0.85 a fully readable energy
+                    // counter carries, so this marks genuinely partial coverage rather
+                    // than firing on every row and becoming noise.
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.caption2).foregroundStyle(.orange)
+                        .help("Some processes in this app could not be read, so this is a partial total.")
+                }
+                Spacer()
+                Text("\(Int((share * 100).rounded()))%")
+                    .monospacedDigit().fontWeight(.medium)
+            }
+
+            // Section 8.5: never severity by colour alone — the percentage above and
+            // the description below both carry the same information as the bar.
+            GeometryReader { geometry in
+                ZStack(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(.quaternary.opacity(0.5))
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(.blue.gradient)
+                        .frame(width: max(2, geometry.size.width * share))
+                }
+            }
+            .frame(height: 8)
+
+            Text(comparison(row))
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 2)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(row.displayName), \(Int((share * 100).rounded())) percent of measured energy. \(comparison(row))")
+    }
+
+    /// Translates average power into something recognisable. Watts are the unit people
+    /// already read off appliances, and the phrasing stays comparative rather than
+    /// claiming a share of the battery pack, which Section 3.1 forbids.
+    private func comparison(_ row: HistoryStore.BucketRow) -> String {
+        let watts = row.averageWatts
+        let level: String
+        switch watts {
+        case ..<0.05:  level = "barely any power"
+        case ..<0.25:  level = "a little power"
+        case ..<1.0:   level = "a moderate amount of power"
+        case ..<3.0:   level = "a lot of power"
+        default:       level = "a very large amount of power"
+        }
+        let minutes = Int(row.observedSeconds / 60)
+        let watched = minutes >= 1 ? " over \(minutes) min watched" : ""
+        return "Used \(level) on average\(watched) — \(String(format: "%.2f W", watts))."
+    }
+
+    // MARK: - Footnote
+
+    /// Section 3.1: the honest caveat, stated once at the bottom in plain words
+    /// instead of hedging every number above it.
+    private var footnote: some View {
+        Text("These shares compare apps with each other. They do not add up to your whole battery — the screen, Wi-Fi and macOS itself also use power, and PowerTask cannot measure every process.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.top, 4)
     }
 }

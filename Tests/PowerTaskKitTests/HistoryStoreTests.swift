@@ -177,6 +177,39 @@ struct HistoryStoreTests {
         #expect(sessions.count == 2)
     }
 
+    @Test("Shares are a fraction of all measured energy, not just the listed rows")
+    func shareDenominator() async throws {
+        let url = temporaryURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let store = try HistoryStore(url: url)
+        let now = Date()
+
+        // Three apps at 3:1:1. The top row must read 60%, not 100%.
+        try await store.record(snapshot(app: "Big", energyNJ: 3_000_000_000), at: now)
+        try await store.record(snapshot(app: "Small1", energyNJ: 1_000_000_000), at: now)
+        try await store.record(snapshot(app: "Small2", energyNJ: 1_000_000_000), at: now)
+
+        let breakdown = try await store.energyBreakdown(
+            from: now.addingTimeInterval(-3600), to: now.addingTimeInterval(3600), limit: 1)
+        #expect(breakdown.rows.count == 1)
+        let share = breakdown.share(of: breakdown.rows[0])
+        #expect(abs(share - 0.6) < 0.001)
+    }
+
+    @Test("Average power is energy over the time actually observed")
+    func averageWatts() async throws {
+        let url = temporaryURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let store = try HistoryStore(url: url)
+        let now = Date()
+
+        // One 2-second sample carrying 2 J: an average of exactly 1 watt.
+        try await store.record(snapshot(app: "Steady", energyNJ: 2_000_000_000), at: now)
+        let breakdown = try await store.energyBreakdown(
+            from: now.addingTimeInterval(-3600), to: now.addingTimeInterval(3600))
+        #expect(abs((breakdown.rows.first?.averageWatts ?? 0) - 1.0) < 0.001)
+    }
+
     @Test("Charging samples do not count as a discharge session")
     func chargingIsNotDischarge() async throws {
         let url = temporaryURL()
