@@ -31,7 +31,9 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <key>CFBundleExecutable</key>        <string>PowerTask</string>
     <key>CFBundlePackageType</key>       <string>APPL</string>
     <key>LSMinimumSystemVersion</key>    <string>15.0</string>
-    <!-- A normal windowed app that also installs a menu-bar extra. -->
+    <!-- A normal windowed app that also installs a menu-bar extra. It switches to
+         accessory mode at runtime when the window closes and background recording is
+         on, so the Dock tile disappears rather than implying an unclosed window. -->
     <key>LSUIElement</key>               <false/>
     <key>NSHighResolutionCapable</key>   <true/>
     <!-- Section 9.1: no account, no analytics, no outbound network request. -->

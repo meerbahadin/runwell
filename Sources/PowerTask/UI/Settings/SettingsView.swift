@@ -12,6 +12,8 @@ struct SettingsView: View {
 
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
+                backgroundSection(environment: environment)
+                Divider()
                 sampling(environment: environment)
                 Divider()
                 display(environment: environment)
@@ -36,6 +38,34 @@ struct SettingsView: View {
             }
         } message: {
             Text("Every recorded sample is removed from this Mac. Live monitoring keeps working.")
+        }
+    }
+
+    // MARK: - Background
+
+    /// Section 5.1 / 1.3. Background recording is what makes history representative,
+    /// so it is offered plainly along with its cost rather than buried.
+    @ViewBuilder
+    private func backgroundSection(environment: AppEnvironment) -> some View {
+        if let background = environment.background {
+            @Bindable var background = background
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Recording").font(.headline)
+
+                Toggle("Keep recording when the window is closed", isOn: $background.runsInBackground)
+                Text(background.statusDescription)
+                    .font(.caption).foregroundStyle(.secondary)
+
+                Toggle("Start PowerTask when I log in", isOn: $background.launchesAtLogin)
+                Text("Without this, nothing is recorded until you open the app — so an overnight battery drain would be missed.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if let error = background.loginItemError {
+                    Label(error, systemImage: "exclamationmark.triangle")
+                        .font(.caption).foregroundStyle(.orange)
+                }
+            }
         }
     }
 

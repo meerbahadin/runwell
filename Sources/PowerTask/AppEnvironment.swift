@@ -33,6 +33,9 @@ final class AppEnvironment {
     private var pruneTask: Task<Void, Never>?
     let actions = ProcessActionService()
 
+    /// Set once the scene exists; owns background cadence and login-item state.
+    var background: BackgroundService?
+
     // MARK: - History
 
     private(set) var history: HistoryStore?

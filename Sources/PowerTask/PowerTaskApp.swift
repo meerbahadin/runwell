@@ -5,13 +5,24 @@ import PowerTaskKit
 @main
 struct PowerTaskApp: App {
     @State private var environment = AppEnvironment()
+    @State private var background: BackgroundService?
 
     var body: some Scene {
         WindowGroup {
             RootView()
                 .environment(environment)
                 .frame(minWidth: 820, minHeight: 520)
-                .task { environment.start() }
+                .task {
+                    environment.start()
+                    if background == nil {
+                        background = BackgroundService(environment: environment)
+                        environment.background = background
+                    }
+                    background?.windowBecameVisible()
+                }
+                // Section 5.1: closing the window drops the sampling cadence rather
+                // than stopping history, so a closed lid still records.
+                .onDisappear { background?.windowBecameHidden() }
         }
         .windowToolbarStyle(.unified)
         .commands {
