@@ -11,7 +11,11 @@ let package = Package(
     targets: [
         .target(
             name: "PowerTaskKit",
-            swiftSettings: [.swiftLanguageMode(.v6)]
+            swiftSettings: [.swiftLanguageMode(.v6)],
+            // Section 2.3: SQLite is preferred for explicit retention and batch
+            // writes. Linking the system library rather than vendoring GRDB keeps
+            // the dependency surface at zero, which Section 9 cares about.
+            linkerSettings: [.linkedLibrary("sqlite3")]
         ),
         .executableTarget(
             name: "PowerTask",

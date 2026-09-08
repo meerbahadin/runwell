@@ -30,7 +30,23 @@ final class AppEnvironment {
     private let sampler: SamplerService
     private var runTask: Task<Void, Never>?
     private var observeTask: Task<Void, Never>?
+    private var pruneTask: Task<Void, Never>?
     let actions = ProcessActionService()
+
+    // MARK: - History
+
+    private(set) var history: HistoryStore?
+    private(set) var historyURL: URL?
+    private(set) var historyError: String?
+
+    /// Section 7.2 / 9.1: history can be disabled entirely while live monitoring
+    /// continues. Persisted so the choice survives a relaunch.
+    var isHistoryEnabled = UserDefaults.standard.object(forKey: "historyEnabled") as? Bool ?? true {
+        didSet {
+            UserDefaults.standard.set(isHistoryEnabled, forKey: "historyEnabled")
+            if isHistoryEnabled { openHistory() } else { history = nil }
+        }
+    }
 
     enum SortColumn: String, CaseIterable, Identifiable {
         case energy = "Energy"
@@ -44,6 +60,21 @@ final class AppEnvironment {
         let capabilities = CapabilityProbe().probe()
         self.capabilities = capabilities
         self.sampler = SamplerService(capabilities: capabilities)
+        if isHistoryEnabled { openHistory() }
+    }
+
+    private func openHistory() {
+        do {
+            let url = try HistoryStore.defaultURL()
+            historyURL = url
+            history = try HistoryStore(url: url)
+            historyError = nil
+        } catch {
+            // Section 10.2: a failing subsystem is disabled independently with a
+            // visible reason rather than taking live monitoring down with it.
+            history = nil
+            historyError = error.localizedDescription
+        }
     }
 
     func start() {
@@ -60,17 +91,52 @@ final class AppEnvironment {
             // only establishes a baseline, since every rate needs two samples.
             await sampler.run()
         }
+        startPruning()
     }
 
     func stop() {
         runTask?.cancel()
         observeTask?.cancel()
+        pruneTask?.cancel()
         runTask = nil
         observeTask = nil
+        pruneTask = nil
     }
 
     private func apply(_ snapshot: SamplerSnapshot) {
         self.snapshot = snapshot
+        // Section 7.2: persistence happens off the main actor, so the UI is never
+        // waiting on a disk write.
+        if let history {
+            Task.detached(priority: .utility) {
+                do { try await history.record(snapshot) }
+                catch { await MainActor.run { self.historyError = error.localizedDescription } }
+            }
+        }
+    }
+
+    /// Section 7.2: retention runs on a slow cadence, not on every sample.
+    private func startPruning() {
+        guard pruneTask == nil else { return }
+        pruneTask = Task { [weak self] in
+            while !Task.isCancelled {
+                if let history = await self?.history {
+                    try? await history.prune()
+                }
+                try? await Task.sleep(for: .seconds(3600))
+            }
+        }
+    }
+
+    func clearHistory() async {
+        guard let history else { return }
+        do { try await history.deleteAllHistory() }
+        catch { historyError = error.localizedDescription }
+    }
+
+    func historyStatistics() async -> HistoryStore.Statistics? {
+        guard let history, let historyURL else { return nil }
+        return try? await history.statistics(url: historyURL)
     }
 
     /// Section 7.3: a power-source transition is a session boundary, so deltas are
@@ -79,7 +145,12 @@ final class AppEnvironment {
         Task { await sampler.beginNewSession() }
     }
 
+    /// Mirrors the sampler's mode for the Settings picker. The sampler stays the
+    /// source of truth; this is a UI-side reflection updated when the user changes it.
+    private(set) var samplingMode: SamplingMode = .foreground
+
     func setMode(_ mode: SamplingMode) {
+        samplingMode = mode
         Task { await sampler.setMode(mode) }
     }
 

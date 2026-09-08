@@ -31,17 +31,22 @@ struct RootView: View {
     @Environment(AppEnvironment.self) private var environment
     @State private var selection: Surface = .overview
 
-    /// Section 8.1 information architecture. History, Diagnostics and Settings are
-    /// later phases; this build ships the three live surfaces.
+    /// Section 8.1 information architecture.
     enum Surface: String, CaseIterable, Identifiable {
         case overview = "Overview"
         case applications = "Applications"
+        case history = "History"
+        case diagnostics = "Diagnostics"
+        case settings = "Settings"
         var id: String { rawValue }
 
         var symbol: String {
             switch self {
             case .overview: "gauge.with.dots.needle.bottom.50percent"
             case .applications: "list.bullet.rectangle"
+            case .history: "chart.xyaxis.line"
+            case .diagnostics: "stethoscope"
+            case .settings: "gearshape"
             }
         }
     }
@@ -62,13 +67,18 @@ struct RootView: View {
         // made AppKit reserve an extra column, which is what left the dead gutter
         // beside the detail content and squeezed the application table to a sliver.
         switch selection {
-        case .overview:
-            // Overview has no per-row detail, so it takes the full width beside the
-            // sidebar instead of stranding an empty third column next to itself.
+        case .overview, .history, .diagnostics, .settings:
+            // These surfaces have no per-row detail, so each takes the full width
+            // beside the sidebar instead of stranding an empty third column.
             NavigationSplitView {
                 surfaceList
             } detail: {
-                OverviewView()
+                switch selection {
+                case .history: HistoryView()
+                case .diagnostics: DiagnosticsView()
+                case .settings: SettingsView()
+                default: OverviewView()
+                }
             }
         case .applications:
             NavigationSplitView {

@@ -68,6 +68,13 @@ public struct ApplicationGroupID: Hashable, Codable, Sendable {
         self.kind = .executable
         self.value = identity.signingIdentifier ?? identity.redactedPath
     }
+
+    /// Stable primary key for history rows. Section 9.1: `value` is already either a
+    /// bundle identifier or a redacted path, so nothing here carries a home directory.
+    public var storageKey: String { "\(kind.rawValue):\(value)" }
+
+    /// The bundle identifier when this group is one, and nil for a bare executable.
+    public var bundleIdentifier: String? { kind == .bundle ? value : nil }
 }
 
 /// Section 6.1 / 7.3. Created at every collector start or resume boundary so that
