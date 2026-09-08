@@ -43,6 +43,19 @@ codesign --force --deep --timestamp --options runtime \
 echo "==> Verifying signature"
 codesign --verify --deep --strict --verbose=2 "$APP"
 
+# The app is notarized and stapled before the image is built, so the copy the user
+# drags to Applications carries its own ticket. A ticket stapled only to the DMG is
+# discarded with the DMG, and the app then warns on any first launch while offline.
+echo "==> Submitting the app for notarization (this takes a few minutes)"
+APP_ZIP="$(mktemp -d)/Runwell.zip"
+ditto -c -k --keepParent "$APP" "$APP_ZIP"
+xcrun notarytool submit "$APP_ZIP" --keychain-profile "$PROFILE" --wait
+rm -f "$APP_ZIP"
+
+echo "==> Stapling the app"
+xcrun stapler staple "$APP"
+xcrun stapler validate "$APP"
+
 echo "==> Building disk image"
 rm -f "$DMG"
 STAGE="$(mktemp -d)"
@@ -55,12 +68,14 @@ rm -rf "$STAGE"
 # app inside it.
 codesign --force --timestamp --sign "$IDENTITY" "$DMG"
 
-echo "==> Submitting for notarization (this takes a few minutes)"
+echo "==> Submitting the disk image for notarization"
 xcrun notarytool submit "$DMG" --keychain-profile "$PROFILE" --wait
 
 # Stapling attaches the notarization ticket to the file, so Gatekeeper can verify it
 # offline. Without this a first launch with no network still warns.
-echo "==> Stapling ticket"
+# Staple the image last. The app inside was stapled before the image was built, so
+# the copy the user drags to Applications carries its own ticket.
+echo "==> Stapling the disk image"
 xcrun stapler staple "$DMG"
 xcrun stapler validate "$DMG"
 
