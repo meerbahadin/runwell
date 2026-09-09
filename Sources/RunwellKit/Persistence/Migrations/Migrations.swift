@@ -4,8 +4,10 @@ import Foundation
 /// upgrades in place rather than being discarded (Section 11.1 covers migration).
 enum Migrations {
     /// Each entry runs once, in order, inside its own transaction.
-    private static let all: [(version: Int, sql: String)] = [
-        (1, """
+    /// A computed property rather than a stored one: the optional data step is a
+    /// non-Sendable closure, which Swift 6 will not allow in mutable global state.
+    private static var all: [(version: Int, code: ((Database) throws -> Void)?, sql: String)] { [
+        (1, code: nil, sql: """
         -- Section 7.1 app_group. The id is a redacted storage key, never a raw path.
         CREATE TABLE IF NOT EXISTS app_group (
             id            TEXT PRIMARY KEY,
@@ -89,7 +91,7 @@ enum Migrations {
             PRIMARY KEY (collector, os_build, hardware_model)
         );
         """),
-        (2, """
+        (2, code: nil, sql: """
         -- Section 7.1 / 3.2: observed duration was reconstructed at read time as
         -- `sample_count * 2`, hardcoding the foreground cadence. Sampling modes run
         -- from 1 to 15 seconds depending on visibility and power state, so a bucket
@@ -106,7 +108,7 @@ enum Migrations {
         UPDATE bucket SET interval_seconds_sum = sample_count * 2
         WHERE interval_seconds_sum = 0 AND sample_count > 0;
         """),
-        (3, """
+        (3, code: nil, sql: """
         -- Section 3 / Appendix F: "an unavailable reading is not a low reading."
         -- Every aggregate column here (energy, CPU, memory, disk) was written as
         -- `value ?? 0` when a process could not be read for that cycle, then
@@ -136,7 +138,67 @@ enum Migrations {
             disk_sample_count   = sample_count
         WHERE energy_sample_count = 0 AND sample_count > 0;
         """),
-    ]
+        (4, code: rekeyToDigest, sql: """
+        -- Section 7.1: the human-readable identity moves to its own column so the
+        -- primary key can shrink to a fixed digest. Nothing is lost — storage_key
+        -- holds exactly what `id` used to, and it is stored once per application
+        -- rather than once per row.
+        ALTER TABLE app_group ADD COLUMN storage_key TEXT;
+        UPDATE app_group SET storage_key = id WHERE storage_key IS NULL;
+        """),
+    ] }
+
+    /// Migration 4's data step. Rewrites every `app_group.id` and the `bucket` /
+    /// `insight_event` rows that reference it to a 16-character digest of the old
+    /// key.
+    ///
+    /// A full day of real use put the bucket table and its automatic primary-key
+    /// index at 94% of a 57 MB database, because the key was a filesystem path —
+    /// averaging 77 characters, up to 331 for nested simulator runtimes — stored
+    /// twice per row against a numeric payload under 80 bytes.
+    ///
+    /// This cannot be expressed in the migration SQL: SQLite has no SHA-256, and the
+    /// digest must match `ApplicationGroupID.storageID` exactly or existing history
+    /// would be orphaned from the identities still being written.
+    ///
+    /// Order matters. `PRAGMA foreign_keys` is ON, and the child rows reference
+    /// `app_group(id)` without ON UPDATE CASCADE, so moving a parent first orphans
+    /// its children and the constraint aborts the migration — taking the whole
+    /// transaction with it. Each application is therefore rekeyed by inserting the
+    /// new parent row, repointing its children at it, and only then deleting the old
+    /// parent, so every child has a valid parent at every point in between.
+    private static func rekeyToDigest(_ database: Database) throws {
+        var mapping: [(old: String, new: String)] = []
+        try database.prepare("SELECT id FROM app_group").query { row in
+            let old = row.string(0)
+            mapping.append((old, ApplicationGroupID.digest(of: old)))
+        }
+        guard !mapping.isEmpty else { return }
+
+        // A digest collision, or an id already rewritten by an interrupted run, would
+        // violate the primary key and abort everything. INSERT OR IGNORE plus a seen
+        // set keeps this safely re-runnable.
+        var seen = Set<String>()
+        for entry in mapping where entry.old != entry.new {
+            guard seen.insert(entry.new).inserted else { continue }
+
+            try database.prepare("""
+                INSERT OR IGNORE INTO app_group
+                    (id, display_name, bundle_id, first_seen, last_seen, storage_key)
+                SELECT ?, display_name, bundle_id, first_seen, last_seen, id
+                FROM app_group WHERE id = ?
+                """).bind(1, entry.new).bind(2, entry.old).run()
+
+            for table in ["bucket", "insight_event", "raw_sample"] {
+                try database.prepare(
+                    "UPDATE OR IGNORE \(table) SET app_group_id = ? WHERE app_group_id = ?"
+                ).bind(1, entry.new).bind(2, entry.old).run()
+            }
+
+            try database.prepare("DELETE FROM app_group WHERE id = ?")
+                .bind(1, entry.old).run()
+        }
+    }
 
     static func apply(to database: Database) throws {
         var version = 0
@@ -145,6 +207,7 @@ enum Migrations {
         for migration in all where migration.version > version {
             try database.transaction {
                 try database.execute(migration.sql)
+                try migration.code?(database)
             }
             // PRAGMA user_version does not accept a bound parameter.
             try database.execute("PRAGMA user_version = \(migration.version)")

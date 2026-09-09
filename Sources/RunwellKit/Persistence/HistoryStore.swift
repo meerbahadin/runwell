@@ -107,10 +107,12 @@ public actor HistoryStore {
 
         try database.transaction {
             let upsertGroup = try database.prepare("""
-                INSERT INTO app_group (id, display_name, bundle_id, first_seen, last_seen)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO app_group (id, display_name, bundle_id, first_seen, last_seen,
+                                       storage_key)
+                VALUES (?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET last_seen = excluded.last_seen,
-                                              display_name = excluded.display_name
+                                              display_name = excluded.display_name,
+                                              storage_key = excluded.storage_key
                 """)
             // Section 3 / Appendix F: each metric's sum and max/avg only ever
             // advance on a sample that actually carried that value — an
@@ -161,11 +163,14 @@ public actor HistoryStore {
                 """)
 
             for group in snapshot.groups {
-                let id = group.id.storageKey
+                let id = group.id.storageID
                 try upsertGroup
                     .bind(1, id).bind(2, group.displayName)
                     .bind(3, group.id.bundleIdentifier)
                     .bind(4, timestamp).bind(5, timestamp)
+                    // The readable identity the digest was made from, kept once per
+                    // application instead of once per history row.
+                    .bind(6, group.id.storageKey)
                     .run()
 
                 let energyMetric = group.totalEnergyDelta
@@ -372,7 +377,7 @@ public actor HistoryStore {
                     VALUES (?, ?, NULL, ?, ?)
                     ON CONFLICT(id) DO UPDATE SET last_seen = excluded.last_seen
                     """)
-                    .bind(1, insight.appGroupID.storageKey)
+                    .bind(1, insight.appGroupID.storageID)
                     .bind(2, insight.appName)
                     .bind(3, Int64(insight.startedAt.timeIntervalSince1970))
                     .bind(4, Int64(wallClock.timeIntervalSince1970))
@@ -389,12 +394,12 @@ public actor HistoryStore {
                         WHERE app_group_id = ? AND type = ? AND ended_at IS NULL
                     )
                     """)
-                    .bind(1, insight.appGroupID.storageKey)
+                    .bind(1, insight.appGroupID.storageID)
                     .bind(2, insight.rule.rawValue)
                     .bind(3, Int64(insight.startedAt.timeIntervalSince1970))
                     .bind(4, insight.severity.rawValue)
                     .bind(5, insight.evidence)
-                    .bind(6, insight.appGroupID.storageKey)
+                    .bind(6, insight.appGroupID.storageID)
                     .bind(7, insight.rule.rawValue)
                     .run()
             }

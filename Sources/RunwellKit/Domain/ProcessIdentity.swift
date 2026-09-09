@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 /// Section 6.1. Unique for the lifetime of exactly one process.
 ///
@@ -69,9 +70,30 @@ public struct ApplicationGroupID: Hashable, Codable, Sendable {
         self.value = identity.signingIdentifier ?? identity.redactedPath
     }
 
-    /// Stable primary key for history rows. Section 9.1: `value` is already either a
-    /// bundle identifier or a redacted path, so nothing here carries a home directory.
+    /// Human-readable identity for this group. Section 9.1: `value` is already either
+    /// a bundle identifier or a redacted path, so nothing here carries a home
+    /// directory. Stored once on `app_group`, for display and debugging.
     public var storageKey: String { "\(kind.rawValue):\(value)" }
+
+    /// The key actually written to every history row.
+    ///
+    /// `storageKey` averaged 77 characters across a day of real rows and reached 331
+    /// for nested simulator runtimes, and because it was the bucket primary key
+    /// SQLite stored it twice — once in the table, once in the automatic index — for
+    /// a row whose numeric payload is under 80 bytes. That put the bucket table and
+    /// its index at 94% of a 57 MB database. A fixed 16-character digest keeps the
+    /// key stable and collision-resistant while making a row's cost independent of
+    /// how deeply nested the executable happens to live.
+    public var storageID: String { ApplicationGroupID.digest(of: storageKey) }
+
+    /// First 8 bytes of SHA-256, hex encoded. Truncation is safe here: the space is
+    /// a few hundred process identities on one machine, where 64 bits leaves
+    /// collision probability negligible, and a collision would merge two apps'
+    /// history rather than corrupt anything.
+    public static func digest(of key: String) -> String {
+        SHA256.hash(data: Data(key.utf8)).prefix(8)
+            .map { String(format: "%02x", $0) }.joined()
+    }
 
     /// The bundle identifier when this group is one, and nil for a bare executable.
     public var bundleIdentifier: String? { kind == .bundle ? value : nil }
