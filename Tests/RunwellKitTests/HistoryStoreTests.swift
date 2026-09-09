@@ -487,4 +487,32 @@ struct HistoryStoreTests {
         #expect(abs(rows[0].confidence - 1.0) < 0.001)
     }
 
+
+    /// Section 3.1: the breakdown must carry the share of the machine it was
+    /// measured from, so the UI can say these totals are not the whole picture.
+    @Test("Energy breakdown reports the coverage it was measured at")
+    func breakdownCarriesCoverage() async throws {
+        let store = try HistoryStore(url: temporaryURL())
+        // 1 readable process, 3 unreadable -> 0.25 coverage.
+        try await store.record(snapshot(app: "Busy", energyNJ: 1_000, cpu: 5))
+
+        let breakdown = try await store.energyBreakdown(
+            from: Date().addingTimeInterval(-3600), to: Date().addingTimeInterval(3600))
+        let coverage = try #require(breakdown.coverage)
+        #expect(abs(coverage - 0.25) < 0.001)
+        #expect(breakdown.isPartial)
+    }
+
+    /// Full coverage must not nag: the disclosure is for genuinely partial totals.
+    @Test("Full coverage is not reported as partial")
+    func fullCoverageIsNotPartial() async throws {
+        let store = try HistoryStore(url: temporaryURL())
+        try await store.record(
+            snapshot(app: "Busy", energyNJ: 1_000, cpu: 5, inaccessibleCount: 0))
+
+        let breakdown = try await store.energyBreakdown(
+            from: Date().addingTimeInterval(-3600), to: Date().addingTimeInterval(3600))
+        #expect(breakdown.isPartial == false)
+    }
+
 }

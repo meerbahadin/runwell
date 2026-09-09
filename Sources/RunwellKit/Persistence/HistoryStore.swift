@@ -323,6 +323,24 @@ public actor HistoryStore {
         public let totalEnergyNJ: UInt64
         public let windowSeconds: Double
 
+        /// The share of the machine's processes these rows were measured from, or nil
+        /// when nothing in the window carried a coverage figure.
+        ///
+        /// Section 3.1: application energy does not cover total discharge, and the
+        /// gap is not small. `ri_energy_nj` is only readable for processes the user
+        /// owns, so `kernel_task`, `WindowServer` and the other root-owned daemons —
+        /// which dominate real draw — are invisible. Measured against physical
+        /// battery discharge over a full day, these totals accounted for roughly an
+        /// eighth of the energy the machine actually used. That gap is permanent and
+        /// cannot be closed without privileges Runwell does not have, so it is
+        /// disclosed rather than hidden: Appendix F forbids presenting a partial
+        /// total as if it were the whole.
+        public let coverage: Double?
+
+        /// True when enough of the machine was unreadable that these totals should
+        /// not be read as the machine's full energy use.
+        public var isPartial: Bool { (coverage ?? 1) < 0.95 }
+
         /// This application's portion of all measured application energy. An
         /// app whose own energy was never readable across the window has no
         /// share to report — 0 here means "excluded from the total", the same
@@ -532,10 +550,31 @@ public actor HistoryStore {
             .bind(3, Int64(to.timeIntervalSince1970))
             .query { if !$0.isNull(0) { total = $0.int(0) } }
 
+        // Coverage for the window, weighted by how many samples carried each figure
+        // so a brief unreadable spell does not count the same as a long one. Only
+        // rows with a readable energy sample contribute, since coverage describes
+        // the energy total this accompanies.
+        var coverage: Double?
+        try database.prepare("""
+            SELECT SUM(coverage_confidence * energy_sample_count), SUM(energy_sample_count)
+            FROM bucket
+            WHERE granularity = ? AND bucket_start >= ? AND bucket_start < ?
+              AND energy_sample_count > 0
+            """)
+            .bind(1, granularity)
+            .bind(2, Int64(from.timeIntervalSince1970))
+            .bind(3, Int64(to.timeIntervalSince1970))
+            .query { row in
+                guard !row.isNull(0), !row.isNull(1) else { return }
+                let samples = row.double(1)
+                if samples > 0 { coverage = row.double(0) / samples }
+            }
+
         return EnergyBreakdown(
             rows: rows,
             totalEnergyNJ: UInt64(max(0, total)),
-            windowSeconds: to.timeIntervalSince(from)
+            windowSeconds: to.timeIntervalSince(from),
+            coverage: coverage
         )
     }
 

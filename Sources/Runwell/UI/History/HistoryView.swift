@@ -425,7 +425,10 @@ struct HistoryView: View {
     private var consumersSection: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.card) {
             HStack(alignment: .firstTextBaseline) {
-                Text("What used the most energy").font(.title3.weight(.semibold))
+                // "What used the most energy" implied the whole machine. These rows
+                // only ever covered measurable applications — Section 3.1 mandates
+                // the narrower claim, and the wording now matches what is counted.
+                Text("Which apps used the most energy").font(.title3.weight(.semibold))
                 Spacer()
                 if let breakdown, !breakdown.rows.isEmpty {
                     Text("\(breakdown.rows.count) apps")
@@ -438,6 +441,7 @@ struct HistoryView: View {
                     ForEach(breakdown.rows) { row in
                         consumerRow(row, share: breakdown.share(of: row))
                     }
+                    if breakdown.isPartial { coverageDisclosure(breakdown) }
                 }
                 .cardSurface()
             } else {
@@ -445,6 +449,33 @@ struct HistoryView: View {
                     .font(.callout).foregroundStyle(.secondary)
             }
         }
+    }
+
+    /// Section 3.1 / Appendix F: says plainly that these shares are of what Runwell
+    /// could measure, not of the machine's total draw.
+    ///
+    /// macOS reports per-process energy only for processes the user owns, so the
+    /// kernel, the window server and the rest of the system daemons — which
+    /// genuinely account for much of a laptop's power — are not in these numbers at
+    /// all. Measured against real battery discharge, the visible apps came to about
+    /// an eighth of what the machine actually used. Nothing here can recover the
+    /// rest, so the honest move is to say so on the same card as the percentages,
+    /// rather than let a reader take "Chrome 62%" as 62% of their battery.
+    private func coverageDisclosure(_ breakdown: HistoryStore.EnergyBreakdown) -> some View {
+        let percent = Int(((breakdown.coverage ?? 0) * 100).rounded())
+        return HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Image(systemName: "info.circle")
+                .font(.caption).foregroundStyle(.secondary)
+                .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 3 }
+            Text("Shares are of the energy Runwell could measure — about \(percent)% of "
+                 + "processes. macOS does not report energy for system processes like "
+                 + "the kernel and window server, so real battery use is higher than "
+                 + "these totals.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.top, 2)
+        .accessibilityElement(children: .combine)
     }
 
     /// One app: name, share of measured energy as both a bar and a percentage, and a
