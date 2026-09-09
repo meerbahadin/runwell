@@ -160,6 +160,25 @@ public struct EnergyCoverage: Sendable {
         self.inaccessibleProcessCount = inaccessibleProcessCount
     }
 
+    /// Number of processes Runwell could actually read this interval.
+    public var readableProcessCount: Int { groups.reduce(0) { $0 + $1.processCount } }
+
+    /// The fraction of the machine's processes this interval could see at all.
+    ///
+    /// This is the honest coverage figure: on a normal desktop session roughly a
+    /// quarter of all processes are root-owned daemons (`kernel_task`,
+    /// `WindowServer`, and friends) whose `ri_energy_nj` the kernel will not report
+    /// to an unprivileged reader — and those are exactly the ones that dominate real
+    /// draw. A full day's measurement put this at ~0.76, moving sample to sample
+    /// with 178–267 processes unreadable, which is why it must never be a constant:
+    /// persisting a fixed 0.85 for every row (as this used to) is a fabricated
+    /// precision signal, the Appendix F sin one level up from a fabricated zero.
+    public var coverageConfidence: Double {
+        let readable = readableProcessCount
+        guard inaccessibleProcessCount > 0 else { return readable > 0 ? 1.0 : 0 }
+        return Double(readable) / Double(readable + inaccessibleProcessCount)
+    }
+
     /// Section 3.2: `measuredAppShare = appDeltaEnergyNJ / sum(allAccessibleProcessDeltaEnergyNJ)`.
     ///
     /// Section 3.1 requires this to be called "measured application energy share",
@@ -169,10 +188,7 @@ public struct EnergyCoverage: Sendable {
         guard accessibleEnergyNJ > 0 else { return .unavailable(.awaitingSecondSample) }
         let share = Double(group.totalEnergyDeltaNJ) / Double(accessibleEnergyNJ)
         // Confidence reflects how much of the machine we could see at all.
-        let confidence = inaccessibleProcessCount == 0 ? 1.0
-            : Double(groups.reduce(0) { $0 + $1.processCount })
-                / Double(groups.reduce(0) { $0 + $1.processCount } + inaccessibleProcessCount)
-        return .init(value: share, provenance: .derived, confidence: confidence)
+        return .init(value: share, provenance: .derived, confidence: coverageConfidence)
     }
 
     /// The wording Section 3.1 mandates for this ratio.

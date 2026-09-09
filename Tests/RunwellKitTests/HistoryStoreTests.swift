@@ -23,7 +23,8 @@ struct HistoryStoreTests {
 
     private func snapshot(
         app: String, energyNJ: UInt64, cpu: Double = 10, percentage: Double = 80,
-        onBattery: Bool = true, first: Bool = false, intervalSeconds: Double = 2
+        onBattery: Bool = true, first: Bool = false, intervalSeconds: Double = 2,
+        disk: Double = 100, inaccessibleCount: Int = 3
     ) -> SamplerSnapshot {
         let id = identity(name: app)
         let metrics = ProcessIntervalMetrics(
@@ -32,7 +33,7 @@ struct HistoryStoreTests {
             physicalFootprintBytes: .measured(2048),
             energyWatts: .derived(Double(energyNJ) / intervalSeconds / 1_000_000_000),
             energyDeltaNJ: energyNJ,
-            diskReadBytesPerSecond: .derived(100),
+            diskReadBytesPerSecond: .derived(disk),
             diskWriteBytesPerSecond: .derived(0),
             wakeupsPerSecond: .derived(1)
         )
@@ -49,7 +50,8 @@ struct HistoryStoreTests {
         )
         return SamplerSnapshot(
             sessionID: SampleSessionID(), groups: [group],
-            coverage: EnergyCoverage(groups: [group], accessibleEnergyNJ: energyNJ, inaccessibleProcessCount: 3),
+            coverage: EnergyCoverage(groups: [group], accessibleEnergyNJ: energyNJ,
+                                     inaccessibleProcessCount: inaccessibleCount),
             battery: battery,
             capabilities: CapabilitySet(statuses: [:], osBuild: "test", hardwareModel: "test",
                                         logicalProcessorCount: 8, hasBattery: true),
@@ -407,4 +409,82 @@ struct HistoryStoreTests {
         let sessions = try await store.batterySessions(from: start.addingTimeInterval(-60), to: Date())
         #expect(sessions.isEmpty)
     }
+
+    // MARK: - Idle-row omission and real coverage (2026-09-09 baseline findings)
+
+    /// A day of real usage produced 167k bucket rows, 45% of which recorded that an
+    /// idle daemon did nothing. Those rows are omitted now — but only when Runwell
+    /// positively measured the app doing nothing.
+    @Test("A measured-idle app writes no bucket row")
+    func measuredIdleWritesNoRow() async throws {
+        let url = temporaryURL()
+        let store = try HistoryStore(url: url)
+        // Not the first sample: that is skipped for a different reason.
+        try await store.record(snapshot(app: "Busy", energyNJ: 1_000, cpu: 5))
+        try await store.record(snapshot(app: "Idle", energyNJ: 0, cpu: 0, disk: 0))
+
+        let stats = try await store.statistics(url: url)
+        // Busy writes 1m + 15m; Idle writes neither.
+        #expect(stats.bucketRows == 2)
+
+        let rows = try await store.topEnergyConsumers(
+            from: Date().addingTimeInterval(-3600), to: Date().addingTimeInterval(3600))
+        #expect(rows.map(\.displayName) == ["Busy"])
+    }
+
+    /// The Appendix F half of the same guard: unreadable is not idle. An app whose
+    /// metrics could not be read must keep its row, or "we could not see this"
+    /// becomes indistinguishable from "we saw nothing happen".
+    @Test("An unreadable app still writes a row, unlike a measured-idle one")
+    func unreadableStillWritesRow() async throws {
+        let url = temporaryURL()
+        let store = try HistoryStore(url: url)
+        try await store.record(unreadableSnapshot(app: "Blocked"))
+
+        let stats = try await store.statistics(url: url)
+        #expect(stats.bucketRows == 2)  // 1m + 15m, both preserved
+    }
+
+    /// Omitting idle rows must not move any number the UI shows. Both bucket read
+    /// paths are SUM/MAX aggregates, to which a row of zeros contributes exactly
+    /// what an absent row does.
+    @Test("Omitting idle rows leaves aggregates unchanged")
+    func idleOmissionPreservesAggregates() async throws {
+        let store = try HistoryStore(url: temporaryURL())
+        try await store.record(snapshot(app: "Busy", energyNJ: 4_000, cpu: 8))
+        try await store.record(snapshot(app: "Idle", energyNJ: 0, cpu: 0, disk: 0))
+
+        let breakdown = try await store.energyBreakdown(
+            from: Date().addingTimeInterval(-3600), to: Date().addingTimeInterval(3600))
+        #expect(breakdown.totalEnergyNJ == 4_000)
+    }
+
+    /// Every row ever written stored exactly 0.85, a literal from MetricEngine, in a
+    /// column whose whole purpose is to vary with how much of the machine was
+    /// readable. It must now reflect the sample's real coverage.
+    @Test("Stored coverage reflects real readable share, not a constant")
+    func coverageIsNotHardcoded() async throws {
+        let store = try HistoryStore(url: temporaryURL())
+        // 1 readable group of 1 process, 3 inaccessible -> 1/4 = 0.25.
+        try await store.record(snapshot(app: "Busy", energyNJ: 1_000, cpu: 5))
+
+        let rows = try await store.topEnergyConsumers(
+            from: Date().addingTimeInterval(-3600), to: Date().addingTimeInterval(3600))
+        #expect(rows.count == 1)
+        #expect(abs(rows[0].confidence - 0.25) < 0.001)
+        #expect(rows[0].confidence != 0.85)
+    }
+
+    /// Full coverage is the honest 1.0, not a discounted constant.
+    @Test("Full coverage stores 1.0")
+    func fullCoverageIsOne() async throws {
+        let store = try HistoryStore(url: temporaryURL())
+        try await store.record(
+            snapshot(app: "Busy", energyNJ: 1_000, cpu: 5, inaccessibleCount: 0))
+
+        let rows = try await store.topEnergyConsumers(
+            from: Date().addingTimeInterval(-3600), to: Date().addingTimeInterval(3600))
+        #expect(abs(rows[0].confidence - 1.0) < 0.001)
+    }
+
 }

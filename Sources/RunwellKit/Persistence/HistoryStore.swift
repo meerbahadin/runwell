@@ -102,6 +102,8 @@ public actor HistoryStore {
         let minute = timestamp - (timestamp % 60)
         let quarterHour = timestamp - (timestamp % 900)
         let session = snapshot.sessionID.rawValue.uuidString
+        // How much of the machine this sample could see — see EnergyCoverage.
+        let coverageConfidence = snapshot.coverage.coverageConfidence
 
         try database.transaction {
             let upsertGroup = try database.prepare("""
@@ -185,10 +187,43 @@ public actor HistoryStore {
                 let disk = diskMetric.value.map { Int64($0 * interval) } ?? 0
                 let diskAvailable = diskMetric.isAvailable
 
+                // Section 7.2 / Appendix F: a row is omitted only when Runwell
+                // positively measured this app doing no attributable work —
+                // energy, CPU and disk all readable and all zero. An *unreadable*
+                // metric still writes its row, because "we could not see this" is
+                // information the read path must keep; only "we looked, and there
+                // was nothing" is safely reconstructable from an absent row.
+                //
+                // Memory residency alone never earns a row. Every one of the 67,687
+                // all-zero rows in a full day's real usage carried a live memory
+                // figure — they are idle-but-resident daemons — and no UI reads
+                // historical memory at all (BucketRow.peakMemoryBytes has no
+                // consumer), so those rows cost 45% of the table to preserve a
+                // number nothing displays.
+                //
+                // What makes this safe rather than a relocated lie: every bucket
+                // read is a SUM/MAX aggregate over a window, to which a row of
+                // zeros contributes exactly what no row contributes. `battery_sample`
+                // is written once per cycle independently of this loop and is the
+                // record of which minutes Runwell was running at all, so an absent
+                // row inside a covered minute means idle, and outside one means the
+                // app was not sampling. Verified against a day of real data: total
+                // attributed energy is identical with and without these rows.
+                let measuredIdle = energyAvailable && cpuAvailable && diskAvailable
+                    && energy == 0 && cpu == 0 && disk == 0
+                if measuredIdle { continue }
+
                 // Section 3: confidence travels with the value, so a bucket built from
                 // partly unreadable processes can be shown as such rather than implying
                 // the same certainty as a fully measured one.
-                let confidence = group.totalEnergyWatts.confidence
+                //
+                // This is the snapshot's real coverage, not the per-metric constant
+                // that used to land here. `totalEnergyWatts.confidence` traces back to
+                // a literal 0.85 in MetricEngine, so every row ever written stored
+                // exactly 0.85 — a column whose stated purpose is to vary with how
+                // much of the machine was readable, that never varied. Coverage is
+                // a property of the sample as a whole, so it comes from the sample.
+                let confidence = energyAvailable ? coverageConfidence : 0
 
                 for (start, granularity) in [(minute, "1m"), (quarterHour, "15m")] {
                     try insertBucket
