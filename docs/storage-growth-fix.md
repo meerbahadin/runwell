@@ -455,56 +455,124 @@ is genuinely unknowable.
 
 # Part 3 — Fixes applied (2026-09-09)
 
-Verified by reverting each fix individually and confirming its test fails with the
-expected wrong value, then restoring. 81 tests before, **86 after**; clean under
+All of §1–§4 and §7–§8 are done. §6 was investigated and deliberately not changed.
+Every fix was verified by reverting it alone and confirming its test fails with the
+expected wrong value. **81 tests before, 94 after**, clean under
 `-Xswiftc -warnings-as-errors`.
 
-## Applied
+| § | Fix | Commit |
+|---|---|---|
+| 8 | Real coverage replaces hardcoded 0.85 | `ee8b8e6` |
+| 1 | Idle rows no longer written | `ee8b8e6` |
+| 7 | Energy coverage disclosed in the UI | `f325710` |
+| 2 | History rekeyed to a 16-char digest | `93fc639` |
+| 3 | 15m tier rolled up, not double-written | `119a093` |
+| 4 | Retention bounded, incremental vacuum, 200 MB ceiling | `119a093` |
 
-**§8 — real coverage instead of a hardcoded 0.85.**
-`EnergyCoverage` gains `readableProcessCount` and `coverageConfidence`
-(`Domain/ApplicationGroup.swift`), extracted from the formula that already existed
-inside the unused `measuredAppShare`. `HistoryStore.record()` now persists the
-snapshot's real coverage rather than `group.totalEnergyWatts.confidence`, which
-traced back to a literal in `MetricEngine.swift:134`.
-*Revert check:* confidence came back as 0.85 — off by 0.65 from the expected 0.25,
-and by 0.10 from 1.0 under full coverage.
+## §8 — coverage is measured, not assumed
 
-**§1 — idle rows are no longer written.**
-A guard in the `for group in snapshot.groups` loop skips a group only when energy,
-CPU and disk were all **readable and zero**. Unreadable metrics still write their
-row, preserving the Appendix F distinction. Memory residency alone no longer earns
-a row.
-*Revert check:* 4 rows instead of 2, and `["Busy", "Idle"]` instead of `["Busy"]`.
+`EnergyCoverage` gained `readableProcessCount` and `coverageConfidence`, extracted
+from the formula that already existed inside the never-called `measuredAppShare`.
+`record()` persists the snapshot's real coverage instead of
+`group.totalEnergyWatts.confidence`, which traced to a literal in
+`MetricEngine.swift:134`.
+*Revert check:* 0.85 came back — off by 0.65 from the expected 0.25, and by 0.10
+from 1.0 under full coverage.
 
-New tests: measured-idle writes no row; unreadable still writes one; omitting idle
-rows leaves aggregates unchanged; coverage reflects readable share; full coverage
-stores 1.0.
+Side effect worth noting: the per-row warning at `confidence < 0.7` in
+`HistoryView.swift` could never fire while every row stored 0.85. It works now.
 
-## Deliberately not applied
+## §1 — idle rows are omitted, unreadable ones are not
 
-**§6 — `memoryPressure` needs no foreground guard. The Part 2 assessment was wrong.**
-`wakeupStorm` and `hiddenBackgroundLoad` guard on `!isForeground` because their
-wording asserts the app is idle ("while you're not using it", "even when it looks
-idle") — naming the focused app contradicts the sentence. `memoryPressure` says
-"Holding 4.2 GB while system memory pressure is warning", which is true regardless
-of focus, and the app in front of you is frequently the legitimate top holder.
-A foreground guard would suppress correct information. The rule is already gated on
-a real kernel pressure level, a top-decile cutoff and a minimum footprint.
+A guard in the write loop skips a group only when energy, CPU and disk were all
+**readable and zero**. Unreadable metrics still write their row, preserving the
+Appendix F distinction. Memory residency alone no longer earns a row.
+*Revert check:* 4 rows instead of 2, `["Busy", "Idle"]` instead of `["Busy"]`.
+
+## §7 — the coverage gap is disclosed
+
+The energy numbers cannot be made correct: `ri_energy_nj` is unreadable for
+root-owned processes, and no amount of code recovers it. So the **claim** was
+narrowed to match the data.
+
+- `EnergyBreakdown` carries the sample-weighted `coverage` it was measured at, and
+  `isPartial`.
+- The consumers card states in plain language that shares are of measurable
+  applications, naming the percentage, when coverage is short of complete.
+- The heading is now *"Which apps used the most energy"* rather than *"What used the
+  most energy"* — the narrower claim the rows actually support.
+
+*Revert check:* coverage came back nil.
+
+## §2 — history rekeyed to a digest
+
+`app_group.id` is now the first 8 bytes of SHA-256 of the old key, hex encoded. The
+readable identity moved to a new `storage_key` column — stored once per application
+instead of once per history row. Migration 4 does the rewrite, and the migration
+runner now takes an optional Swift step because SQLite has no SHA-256.
+
+**The test caught a real bug.** `PRAGMA foreign_keys` is ON and the child tables
+reference `app_group(id)` without `ON UPDATE CASCADE`, so moving a parent first
+orphans its children and aborts the whole migration. Each application is now rekeyed
+by inserting the new parent, repointing children, then deleting the old parent.
+
+*Verified against a copy of the real database:* 278 groups before and after, zero
+orphans, every energy total identical. Average key length 66.7 → 16 chars; bucket
+plus its index shrank 42% on that sample.
+
+## §3 — the 15m tier is derived, not double-written
+
+`rollUpQuarterHours()` builds 15m buckets from completed minutes on the retention
+pass. A quarter-hour now costs one row per active app instead of fifteen. The
+aggregation mirrors the old live upsert column for column, including the
+sample-weighted memory average and coverage that a plain `AVG()` would get wrong.
+`INSERT OR REPLACE` makes it idempotent; only fully elapsed quarter-hours roll up.
+
+**It runs before the deletes in `prune()`.** 1m rows expire long before 15m rows, so
+the reverse order permanently loses every quarter-hour whose minutes just aged out.
+*Revert check:* moving the rollup after the deletes loses the data — 0 J instead of
+9000 J.
+
+## §4 — retention is actually bounded
+
+- `quarterHourBucketDays` 90 → 30.
+- `PRAGMA auto_vacuum = INCREMENTAL` at creation, and `prune()` ends with an
+  incremental vacuum, so freed pages return to the filesystem. Previously only
+  "Delete All History" ever shrank the file, so a size spike was permanent.
+- `enforceSizeLimit()` enforces a 200 MB ceiling, dropping the oldest minute detail
+  a day at a time, never below one day. Time tiers alone bound nothing — they assume
+  a steady application count, and a real day recorded 698 groups.
+- When the ceiling trims history, Settings says so rather than letting recorded
+  history vanish quietly. The retention copy no longer claims 90 days.
+
+## §6 — deliberately not changed; the Part 2 assessment was wrong
+
+`memoryPressure` does **not** need a foreground guard. `wakeupStorm` and
+`hiddenBackgroundLoad` have one because their wording asserts the app is idle
+("while you're not using it", "even when it looks idle") — naming the focused app
+contradicts the sentence. `memoryPressure` says "Holding 4.2 GB while system memory
+pressure is warning", which is true regardless of focus, and the app in front of you
+is frequently the legitimate top holder. A guard would suppress correct information.
+The rule is already gated on a real kernel pressure level, a top-decile cutoff and a
+minimum footprint.
+
+## End-to-end verification
+
+The full pipeline was run against a copy of the real database: migration 4 plus the
+rollup preserved 1m energy exactly (24,966,682,361 nJ before and after), the
+rolled-up 15m tier equalled the minutes it derived from, and no row was orphaned.
 
 ## Still outstanding
 
-- **§7 disclosure** — the energy *numbers* cannot be fixed (`ri_energy_nj` is not
-  readable for root-owned processes), but the UI must stop presenting ~15% of the
-  machine as the whole. `measuredAppShare` and `shareLabel` exist and remain unused.
-  This is the highest-value remaining work.
-- **§2 key hashing (migration 4)**, **§3 15m rollup**, **§4 retention bound**.
-- App-layer test coverage; never run on other hardware.
+- **Unmeasured in production.** The tests prove the logic; only a fresh baseline day
+  proves the ~76 MB/day actually drops. This is the next thing to do.
+- **App-layer test coverage** (`AppEnvironment`, `BackgroundService`,
+  `NotificationService`) — still zero, still the source of most bugs found.
+- **Never run on another Mac.**
 
 ## Note on the dataset
 
-The history database was cleared shortly after this audit (57 MB → 290 KB, app not
-running). Every figure in Parts 1 and 2 comes from the full 17-hour dataset and
-stands, but the `insight_event` rows behind the §6 discussion are gone — that
-assessment was therefore completed from the source, not re-checked against data.
-A fresh baseline is needed to measure the storage fixes in production.
+The history database was cleared shortly after the audit (57 MB → 290 KB). Every
+figure in Parts 1 and 2 comes from the full 17-hour dataset and stands, but the
+`insight_event` rows behind §6 are gone, so that assessment was completed from the
+source rather than re-checked against data.
