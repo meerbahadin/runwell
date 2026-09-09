@@ -21,7 +21,7 @@ public actor HistoryStore {
         public static let `default` = RetentionPolicy(
             rawSampleHours: 2,
             minuteBucketDays: 7,
-            quarterHourBucketDays: 90,
+            quarterHourBucketDays: 30,
             insightDays: 90,
             identityDaysAfterLastSeen: 30
         )
@@ -100,7 +100,6 @@ public actor HistoryStore {
 
         let timestamp = Int64(wallClock.timeIntervalSince1970)
         let minute = timestamp - (timestamp % 60)
-        let quarterHour = timestamp - (timestamp % 900)
         let session = snapshot.sessionID.rawValue.uuidString
         // How much of the machine this sample could see — see EnergyCoverage.
         let coverageConfidence = snapshot.coverage.coverageConfidence
@@ -230,7 +229,14 @@ public actor HistoryStore {
                 // a property of the sample as a whole, so it comes from the sample.
                 let confidence = energyAvailable ? coverageConfidence : 0
 
-                for (start, granularity) in [(minute, "1m"), (quarterHour, "15m")] {
+                // Only the 1m tier is written live. The 15m tier is derived from it
+                // by `rollUpQuarterHours()` on the retention pass: writing both here
+                // doubled every row touch, and the 15m tier is retained 13x longer
+                // than the 1m tier, so it dominated long-run size. Rolling up means
+                // a quarter-hour costs one row per active app instead of fifteen.
+                let start = minute
+                let granularity = "1m"
+                do {
                     try insertBucket
                         .bind(1, id).bind(2, start).bind(3, granularity).bind(4, session)
                         .bind(5, energyAvailable ? energy : 0)
@@ -660,9 +666,70 @@ public actor HistoryStore {
     // MARK: - Retention
 
     /// Section 7.2. Called on a slow cadence, not every cycle.
+    /// Builds the 15m tier from completed 1m buckets.
+    ///
+    /// Runs on the retention pass rather than on every sample: the tiers used to be
+    /// written together on each cycle, which doubled write volume and, because the
+    /// 15m tier outlives the 1m tier by 13x, accounted for most of the long-run
+    /// database size.
+    ///
+    /// Only quarter-hours that have fully elapsed are rolled up, so a bucket is
+    /// built once from complete data instead of being rewritten as minutes arrive.
+    /// The aggregation mirrors what the live upsert did column for column —
+    /// including the sample-weighted memory average, which a plain AVG() would get
+    /// wrong whenever the contributing minutes had different sample counts.
+    ///
+    /// `INSERT OR REPLACE` makes this idempotent: re-rolling a window that was
+    /// already built rewrites it with the same values rather than double-counting.
+    public func rollUpQuarterHours(now: Date = Date()) throws {
+        let cutoff = Int64(now.timeIntervalSince1970) / 900 * 900
+        try database.execute("""
+            INSERT OR REPLACE INTO bucket (
+                app_group_id, bucket_start, granularity, session_id,
+                energy_nj_sum, cpu_percent_sum, cpu_percent_max,
+                memory_bytes_avg, memory_bytes_max, disk_bytes_sum,
+                sample_count, coverage_confidence, interval_seconds_sum,
+                energy_sample_count, cpu_sample_count, memory_sample_count,
+                disk_sample_count)
+            SELECT
+                app_group_id,
+                bucket_start / 900 * 900,
+                '15m',
+                MIN(session_id),
+                SUM(energy_nj_sum),
+                SUM(cpu_percent_sum),
+                MAX(cpu_percent_max),
+                CASE WHEN SUM(memory_sample_count) > 0
+                     THEN SUM(memory_bytes_avg * memory_sample_count)
+                          / SUM(memory_sample_count)
+                     ELSE 0 END,
+                MAX(memory_bytes_max),
+                SUM(disk_bytes_sum),
+                SUM(sample_count),
+                CASE WHEN SUM(energy_sample_count) > 0
+                     THEN SUM(coverage_confidence * energy_sample_count)
+                          / SUM(energy_sample_count)
+                     ELSE 0 END,
+                SUM(interval_seconds_sum),
+                SUM(energy_sample_count),
+                SUM(cpu_sample_count),
+                SUM(memory_sample_count),
+                SUM(disk_sample_count)
+            FROM bucket
+            WHERE granularity = '1m' AND bucket_start < \(cutoff)
+            GROUP BY app_group_id, bucket_start / 900
+            """)
+    }
+
     public func prune(now: Date = Date()) throws {
         let seconds = { (days: Int) in Int64(now.timeIntervalSince1970) - Int64(days) * 86_400 }
         let rawCutoff = Int64(now.timeIntervalSince1970) - Int64(retention.rawSampleHours) * 3_600
+
+        // Before anything is deleted. The 15m tier is derived from 1m rows, and this
+        // method drops 1m rows past their (much shorter) retention — so rolling up
+        // afterwards would silently lose every quarter-hour whose minutes had just
+        // aged out, with no way to reconstruct them.
+        try rollUpQuarterHours(now: now)
 
         try database.transaction {
             try database.execute("DELETE FROM raw_sample WHERE timestamp < \(rawCutoff)")
@@ -682,6 +749,48 @@ public actor HistoryStore {
                   AND id NOT IN (SELECT DISTINCT app_group_id FROM bucket)
                 """)
         }
+
+        // Deleting rows frees pages for reuse but never shrinks the file, so a
+        // database that spiked once stayed large forever — only "Delete All History"
+        // ever reclaimed anything. Incremental vacuum returns freed pages a bounded
+        // chunk at a time, which keeps this cheap enough to run on every pass
+        // instead of blocking on a full VACUUM's whole-file rewrite.
+        try? database.execute("PRAGMA incremental_vacuum(256)")
+    }
+
+    /// A hard ceiling on file size, checked after retention has run.
+    ///
+    /// Time-based retention alone bounds nothing: it assumes a roughly constant
+    /// number of applications per interval, and a day of real use recorded 698
+    /// groups with 312 active per minute. If growth outruns the tiers again, the
+    /// oldest 1m buckets are dropped a day at a time until the file is back under
+    /// the limit — the 1m tier first because it is the largest and the shortest
+    /// lived, and the 15m rollups covering that time already exist.
+    ///
+    /// Returns true when it had to drop anything, so the caller can surface that
+    /// rather than let history silently disappear.
+    @discardableResult
+    public func enforceSizeLimit(_ limitBytes: Int64, now: Date = Date()) throws -> Bool {
+        func fileSize() -> Int64 {
+            guard let pages = try? database.pageCount(),
+                  let size = try? database.pageSize() else { return 0 }
+            return pages * size
+        }
+        guard fileSize() > limitBytes else { return false }
+
+        var dropped = false
+        // Never drop below a day of minute detail: past that the tier is not what is
+        // large, and deleting it would cost the app its recent-history view for no
+        // meaningful saving.
+        for days in stride(from: retention.minuteBucketDays - 1, through: 1, by: -1) {
+            let cutoff = Int64(now.timeIntervalSince1970) - Int64(days) * 86_400
+            try database.execute(
+                "DELETE FROM bucket WHERE granularity = '1m' AND bucket_start < \(cutoff)")
+            try? database.execute("PRAGMA incremental_vacuum(4096)")
+            dropped = true
+            if fileSize() <= limitBytes { break }
+        }
+        return dropped
     }
 
     /// Section 9.1: the user can clear all history while keeping live monitoring.

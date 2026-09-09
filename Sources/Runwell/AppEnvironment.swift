@@ -34,6 +34,16 @@ final class AppEnvironment {
     private var runTask: Task<Void, Never>?
     private var observeTask: Task<Void, Never>?
     private var pruneTask: Task<Void, Never>?
+
+    /// Ceiling for the history file. Chosen against measured growth: a day of real
+    /// use produced 54 MB before the storage fixes, so this leaves room for months
+    /// of ordinary history while still bounding the pathological case.
+    static let historySizeLimitBytes: Int64 = 200 * 1_024 * 1_024
+
+    /// True once retention has had to drop history to stay under the ceiling.
+    /// Surfaced in Settings rather than handled silently: losing recorded history is
+    /// exactly the kind of thing the user should be told about, not discover.
+    private(set) var historyWasTrimmed = false
     let actions = ProcessActionService()
 
     /// Set once the scene exists; owns background cadence and login-item state.
@@ -220,7 +230,17 @@ final class AppEnvironment {
                 // A plain (non-detached) Task inherits the enclosing @MainActor
                 // context, so reading self?.history here needs no await at all —
                 // only the actor-hopping call into HistoryStore below does.
-                if let history = self?.history { try? await history.prune() }
+                if let history = self?.history {
+                    try? await history.prune()
+                    // Time-based retention assumes a roughly steady number of
+                    // applications per interval; a day of real use recorded 698.
+                    // The ceiling is what actually bounds the file if that
+                    // assumption breaks again.
+                    if let dropped = try? await history.enforceSizeLimit(
+                        AppEnvironment.historySizeLimitBytes), dropped {
+                        await MainActor.run { self?.historyWasTrimmed = true }
+                    }
+                }
                 try? await Task.sleep(for: .seconds(3600))
             }
         }

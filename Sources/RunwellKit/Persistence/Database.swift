@@ -41,6 +41,25 @@ final class Database {
         try execute("PRAGMA journal_mode = DELETE")
         try execute("PRAGMA synchronous = NORMAL")
         try execute("PRAGMA foreign_keys = ON")
+        // Lets retention hand freed pages back to the filesystem incrementally.
+        // Without this the file only ever grows: deleted rows free pages for reuse
+        // inside the database but never shrink it, so a size spike is permanent
+        // until the user clears everything. Set before any table exists on a new
+        // database, since changing auto_vacuum later requires a full VACUUM.
+        try execute("PRAGMA auto_vacuum = INCREMENTAL")
+    }
+
+    /// Page accounting, for the retention size ceiling.
+    func pageCount() throws -> Int64 {
+        var value: Int64 = 0
+        try prepare("PRAGMA page_count").query { value = $0.int(0) }
+        return value
+    }
+
+    func pageSize() throws -> Int64 {
+        var value: Int64 = 0
+        try prepare("PRAGMA page_size").query { value = $0.int(0) }
+        return value
     }
 
     deinit { sqlite3_close_v2(handle) }

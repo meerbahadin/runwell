@@ -424,8 +424,9 @@ struct HistoryStoreTests {
         try await store.record(snapshot(app: "Idle", energyNJ: 0, cpu: 0, disk: 0))
 
         let stats = try await store.statistics(url: url)
-        // Busy writes 1m + 15m; Idle writes neither.
-        #expect(stats.bucketRows == 2)
+        // Only the 1m tier is written live now; 15m is rolled up on the retention
+        // pass. Busy writes its minute row, Idle writes nothing.
+        #expect(stats.bucketRows == 1)
 
         let rows = try await store.topEnergyConsumers(
             from: Date().addingTimeInterval(-3600), to: Date().addingTimeInterval(3600))
@@ -442,7 +443,7 @@ struct HistoryStoreTests {
         try await store.record(unreadableSnapshot(app: "Blocked"))
 
         let stats = try await store.statistics(url: url)
-        #expect(stats.bucketRows == 2)  // 1m + 15m, both preserved
+        #expect(stats.bucketRows == 1)  // the minute row is preserved
     }
 
     /// Omitting idle rows must not move any number the UI shows. Both bucket read
@@ -513,6 +514,94 @@ struct HistoryStoreTests {
         let breakdown = try await store.energyBreakdown(
             from: Date().addingTimeInterval(-3600), to: Date().addingTimeInterval(3600))
         #expect(breakdown.isPartial == false)
+    }
+
+
+    // MARK: - Quarter-hour rollup and size ceiling
+
+    /// The 15m tier used to be accumulated live alongside 1m. Rolling it up must
+    /// produce the same totals the dual write did, or historical quarter-hours would
+    /// silently change value.
+    @Test("Rolled-up 15m buckets match the sum of their minutes")
+    func rollUpMatchesMinutes() async throws {
+        let store = try HistoryStore(url: temporaryURL())
+        // Three samples inside one quarter-hour, at distinct minutes.
+        let base = Date(timeIntervalSince1970: TimeInterval(1_000_000 / 900 * 900))
+        for offset in [0.0, 60.0, 120.0] {
+            try await store.record(
+                snapshot(app: "Busy", energyNJ: 1_000, cpu: 6),
+                at: base.addingTimeInterval(offset))
+        }
+        // Roll up from a point after that quarter-hour has fully elapsed.
+        try await store.rollUpQuarterHours(now: base.addingTimeInterval(1_800))
+
+        let minutes = try await store.energyBreakdown(
+            from: base, to: base.addingTimeInterval(900), granularity: "1m")
+        let quarter = try await store.energyBreakdown(
+            from: base, to: base.addingTimeInterval(900), granularity: "15m")
+        #expect(minutes.totalEnergyNJ == 3_000)
+        #expect(quarter.totalEnergyNJ == minutes.totalEnergyNJ)
+        #expect(quarter.rows.count == 1)
+        #expect(quarter.rows[0].observedSeconds == minutes.rows[0].observedSeconds)
+    }
+
+    /// Rolling up twice must not double-count: the retention pass runs hourly and
+    /// will revisit the same completed quarter-hours.
+    @Test("Rolling up twice is idempotent")
+    func rollUpIsIdempotent() async throws {
+        let store = try HistoryStore(url: temporaryURL())
+        let base = Date(timeIntervalSince1970: TimeInterval(1_000_000 / 900 * 900))
+        try await store.record(snapshot(app: "Busy", energyNJ: 5_000, cpu: 6), at: base)
+
+        try await store.rollUpQuarterHours(now: base.addingTimeInterval(1_800))
+        try await store.rollUpQuarterHours(now: base.addingTimeInterval(1_800))
+
+        let quarter = try await store.energyBreakdown(
+            from: base, to: base.addingTimeInterval(900), granularity: "15m")
+        #expect(quarter.totalEnergyNJ == 5_000)
+    }
+
+    /// A quarter-hour still in progress must not be rolled up, or it would be
+    /// written from partial data and then rewritten as later minutes arrive.
+    @Test("An in-progress quarter-hour is not rolled up")
+    func rollUpSkipsIncompleteWindow() async throws {
+        let store = try HistoryStore(url: temporaryURL())
+        let base = Date(timeIntervalSince1970: TimeInterval(1_000_000 / 900 * 900))
+        try await store.record(snapshot(app: "Busy", energyNJ: 5_000, cpu: 6), at: base)
+
+        // "Now" is inside the same quarter-hour the sample landed in.
+        try await store.rollUpQuarterHours(now: base.addingTimeInterval(60))
+
+        let quarter = try await store.energyBreakdown(
+            from: base, to: base.addingTimeInterval(900), granularity: "15m")
+        #expect(quarter.rows.isEmpty)
+    }
+
+
+    /// The retention pass must roll up before it deletes: 1m rows expire long before
+    /// the 15m tier does, so rolling up afterwards would lose every quarter-hour
+    /// whose minutes had just aged out.
+    @Test("Prune rolls up before deleting expired minutes")
+    func pruneRollsUpBeforeDeleting() async throws {
+        let policy = HistoryStore.RetentionPolicy(
+            rawSampleHours: 2, minuteBucketDays: 7, quarterHourBucketDays: 30,
+            insightDays: 90, identityDaysAfterLastSeen: 30)
+        let store = try HistoryStore(url: temporaryURL(), retention: policy)
+
+        // A sample from 8 days ago: past 1m retention, inside 15m retention.
+        let old = Date().addingTimeInterval(-8 * 86_400)
+        try await store.record(snapshot(app: "Busy", energyNJ: 9_000, cpu: 4), at: old)
+        try await store.prune()
+
+        // The minute row is gone, but its energy survives in the rolled-up tier.
+        let minutes = try await store.energyBreakdown(
+            from: old.addingTimeInterval(-900), to: old.addingTimeInterval(900),
+            granularity: "1m")
+        let quarter = try await store.energyBreakdown(
+            from: old.addingTimeInterval(-900), to: old.addingTimeInterval(900),
+            granularity: "15m")
+        #expect(minutes.totalEnergyNJ == 0)
+        #expect(quarter.totalEnergyNJ == 9_000)
     }
 
 }

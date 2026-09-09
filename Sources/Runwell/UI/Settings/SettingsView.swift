@@ -159,9 +159,19 @@ struct SettingsView: View {
             }
 
             // Section 7.2 retention tiers, stated rather than buried.
-            Text("Raw samples are kept for 2 hours, per-minute totals for 7 days and 15-minute totals for 90 days.")
+            Text("Raw samples are kept for 2 hours, per-minute totals for 7 days and "
+                 + "15-minute totals for 30 days.")
                 .font(.callout).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+
+            if environment.historyWasTrimmed {
+                // Dropping recorded history is not something to do quietly: the user
+                // asked for a retention window and is getting less than it.
+                Text("History grew past 200 MB, so the oldest per-minute detail was "
+                     + "removed to stay within it. Longer 15-minute history is unaffected.")
+                    .font(.callout).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             Button("Delete All History…", role: .destructive) { confirmingClear = true }
                 .disabled(environment.history == nil)
