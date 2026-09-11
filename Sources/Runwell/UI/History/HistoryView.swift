@@ -11,7 +11,7 @@ struct HistoryView: View {
     @State private var range: Range = .sixHours
     @State private var battery: [HistoryStore.BatteryPoint] = []
     @State private var breakdown: HistoryStore.EnergyBreakdown?
-    @State private var sessions: [HistoryStore.BatterySession] = []
+    @State private var days: [HistoryStore.BatteryDay] = []
     @State private var episodes: [HistoryStore.InsightEpisode] = []
     @State private var isLoading = true
 
@@ -86,7 +86,7 @@ struct HistoryView: View {
         battery = (try? await store.batteryHistory(from: from, to: to)) ?? []
         breakdown = try? await store.energyBreakdown(
             from: from, to: to, granularity: range.granularity, limit: 8)
-        sessions = (try? await store.batterySessions(from: from, to: to)) ?? []
+        days = (try? await store.batteryDays(from: from, to: to)) ?? []
         episodes = (try? await store.insightHistory(from: from, to: to)) ?? []
         isLoading = false
     }
@@ -381,20 +381,31 @@ struct HistoryView: View {
     private var sessionsSection: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.row + 2) {
             Text("Time on battery").font(.title3.weight(.semibold))
-            if sessions.isEmpty {
+            if days.isEmpty {
                 Text("Your Mac has been plugged in for this whole period.")
                     .font(.callout).foregroundStyle(.secondary)
             } else {
-                ForEach(sessions) { session in
-                    HStack(spacing: 12) {
-                        Image(systemName: "battery.50")
-                            .foregroundStyle(.secondary)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("\(session.start.formatted(date: .omitted, time: .shortened)) – \(session.end.formatted(date: .omitted, time: .shortened))")
-                            Text(sessionSummary(session))
-                                .font(.callout).foregroundStyle(.secondary)
+                // Grouped by day rather than listed as raw runs. With the lid closed
+                // macOS dark-wakes every 15–20 minutes, and each wake is its own run
+                // with a long gap either side, so the ungrouped list was dozens of
+                // accurate but meaningless "On battery for 0m" rows.
+                ForEach(days) { day in
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 12) {
+                            Image(systemName: "battery.50")
+                                .foregroundStyle(.secondary)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(dayTitle(day.date)).fontWeight(.medium)
+                                Text(daySummary(day))
+                                    .font(.callout).foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            Spacer()
+                            if let rate = day.percentagePerHour {
+                                Text("\(Int(rate.rounded()))%/h")
+                                    .monospacedDigit().foregroundStyle(.secondary)
+                            }
                         }
-                        Spacer()
                     }
                     .cardSurface()
                 }
@@ -407,16 +418,35 @@ struct HistoryView: View {
         return minutes >= 60 ? "\(minutes / 60)h \(minutes % 60)m" : "\(minutes)m"
     }
 
-    /// Reads as a sentence, and adds the rate only once there is enough of a run for
-    /// an extrapolation to mean anything.
-    private func sessionSummary(_ session: HistoryStore.BatterySession) -> String {
-        let used = Int(session.percentageUsed)
-        let duration = durationText(session.duration)
-        guard used > 0, session.duration >= 600 else {
-            return used > 0 ? "Used \(used)% over \(duration)" : "On battery for \(duration)"
+    /// "Today", "Yesterday", or a weekday and date.
+    private func dayTitle(_ date: Date) -> String {
+        let calendar = Calendar.current
+        if calendar.isDateInToday(date) { return "Today" }
+        if calendar.isDateInYesterday(date) { return "Yesterday" }
+        return date.formatted(.dateTime.weekday(.wide).day().month(.abbreviated))
+    }
+
+    /// Reads as a sentence. Says how much battery the day cost and over how much
+    /// *observed* time — Appendix F: the gaps between dark-wakes were never sampled,
+    /// so a fragmented day says so rather than implying the whole span was measured.
+    private func daySummary(_ day: HistoryStore.BatteryDay) -> String {
+        let used = Int(day.percentageUsed.rounded())
+        let observed = durationText(day.observedDuration)
+        let runs = day.sessions.count
+        guard used > 0 else {
+            return runs == 1
+                ? "On battery for \(observed), no measurable drop"
+                : "On battery across \(runs) short periods, no measurable drop"
         }
-        let perHour = session.percentageUsed / (session.duration / 3600)
-        return "Used \(used)% over \(duration) — about \(Int(perHour))% per hour at that rate"
+        if day.isFragmented {
+            // The span is real, the observed time is small, and conflating them
+            // would overstate what was actually measured.
+            return "Used \(used)% across \(runs) periods, \(observed) of it measured "
+                 + "— the rest of the time your Mac was asleep"
+        }
+        return runs == 1
+            ? "Used \(used)% over \(observed)"
+            : "Used \(used)% over \(observed) across \(runs) periods"
     }
 
     // MARK: - Consumers

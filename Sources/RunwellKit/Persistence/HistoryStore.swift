@@ -630,6 +630,71 @@ public actor HistoryStore {
         public var duration: TimeInterval { end.timeIntervalSince(start) }
     }
 
+    /// A calendar day's battery sessions, with the day's totals.
+    ///
+    /// Sessions alone read badly across sleep. macOS dark-wakes every 15–20 minutes
+    /// with the lid closed, and each wake is a separate run of samples with a long
+    /// gap on either side, so `batterySessions` correctly reports dozens of
+    /// fragments a minute or less long — a real day produced 93 such gaps in three
+    /// days. A list of "On battery for 0m" rows is accurate and useless. Grouping by
+    /// day restores the thing a reader actually wants: how much battery that day
+    /// cost, and over how long.
+    public struct BatteryDay: Sendable, Identifiable {
+        public let id: Date
+        /// Local midnight for the day these sessions fall in.
+        public var date: Date { id }
+        public let sessions: [BatterySession]
+
+        /// Battery actually used across the day's runs. Summed per session rather
+        /// than taken from first and last reading, so recharges in between do not
+        /// cancel out the discharge either side of them.
+        public var percentageUsed: Double {
+            sessions.reduce(0) { $0 + $1.percentageUsed }
+        }
+
+        /// Time the machine was on battery *and* being sampled. Appendix F: the gaps
+        /// between dark-wakes were not observed, so they are not claimed as
+        /// measured time — this is why it is named `observed` and not `duration`.
+        public var observedDuration: TimeInterval {
+            sessions.reduce(0) { $0 + $1.duration }
+        }
+
+        /// Wall-clock span from the first run's start to the last run's end.
+        public var span: TimeInterval {
+            guard let first = sessions.first, let last = sessions.last else { return 0 }
+            return last.end.timeIntervalSince(first.start)
+        }
+
+        /// True when the day's runs are mostly gap — a lid-closed day, where the
+        /// span is real but the observed time behind it is small.
+        public var isFragmented: Bool {
+            sessions.count > 2 && observedDuration < span * 0.5
+        }
+
+        /// Discharge rate over observed time. Nil when too little was observed for
+        /// an extrapolation to mean anything, rather than dividing by a few seconds
+        /// and reporting a confident absurdity.
+        public var percentagePerHour: Double? {
+            guard observedDuration >= 600, percentageUsed > 0 else { return nil }
+            return percentageUsed / (observedDuration / 3600)
+        }
+    }
+
+    /// Groups discharge runs by the calendar day they start in.
+    public func batteryDays(
+        from: Date, to: Date, maximumGap: TimeInterval = 600
+    ) throws -> [BatteryDay] {
+        let sessions = try batterySessions(from: from, to: to, maximumGap: maximumGap)
+        // Uses the store's UTC calendar only for bucketing keys elsewhere; days are a
+        // user-facing concept, so this one is deliberately the local calendar.
+        var local = Calendar(identifier: .gregorian)
+        local.timeZone = .current
+        let grouped = Dictionary(grouping: sessions) { local.startOfDay(for: $0.start) }
+        return grouped.keys.sorted(by: >).map { day in
+            BatteryDay(id: day, sessions: grouped[day]!.sorted { $0.start < $1.start })
+        }
+    }
+
     /// Splits battery samples into discharge runs. A run ends when the power source
     /// changes or a gap longer than `maximumGap` appears — a gap means the collector
     /// was not running, so the two sides must not be joined into one session.

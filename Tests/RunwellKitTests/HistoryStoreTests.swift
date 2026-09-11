@@ -604,4 +604,90 @@ struct HistoryStoreTests {
         #expect(quarter.totalEnergyNJ == 9_000)
     }
 
+
+    // MARK: - Battery days
+
+    /// With the lid closed macOS dark-wakes every 15-20 minutes, so one overnight
+    /// battery run arrives as dozens of one-sample fragments with long gaps between
+    /// them. Grouping by day is what makes that readable.
+    @Test("Dark-wake fragments group into one day")
+    func darkWakeFragmentsGroupByDay() async throws {
+        let store = try HistoryStore(url: temporaryURL())
+        // Midday local, so the whole run stays inside one local calendar day.
+        var midday = Calendar.current.startOfDay(for: Date())
+        midday = midday.addingTimeInterval(12 * 3600)
+
+        // Six wake windows, ~16 minutes apart, each two samples a minute apart.
+        var percentage = 90.0
+        for wake in 0..<6 {
+            let base = midday.addingTimeInterval(Double(wake) * 16 * 60)
+            for step in 0..<2 {
+                try await store.record(
+                    snapshot(app: "Busy", energyNJ: 1_000, cpu: 5, percentage: percentage),
+                    at: base.addingTimeInterval(Double(step) * 60))
+                percentage -= 0.5
+            }
+        }
+
+        let sessions = try await store.batterySessions(
+            from: midday.addingTimeInterval(-3600), to: midday.addingTimeInterval(7200))
+        let days = try await store.batteryDays(
+            from: midday.addingTimeInterval(-3600), to: midday.addingTimeInterval(7200))
+
+        // Each wake is its own session, but they collapse to a single day.
+        #expect(sessions.count == 6)
+        #expect(days.count == 1)
+        #expect(days[0].sessions.count == 6)
+
+        // The day's usage is the sum of its runs, not first-minus-last across gaps.
+        #expect(abs(days[0].percentageUsed - sessions.reduce(0) { $0 + $1.percentageUsed }) < 0.001)
+
+        // Observed time counts only the sampled minutes, never the gaps between them.
+        #expect(days[0].observedDuration < days[0].span)
+        #expect(days[0].isFragmented)
+    }
+
+    /// A continuous run must not be labelled fragmented, or the "your Mac was asleep"
+    /// wording would appear on a day it never applied to.
+    @Test("A continuous run is not reported as fragmented")
+    func continuousRunIsNotFragmented() async throws {
+        let store = try HistoryStore(url: temporaryURL())
+        var midday = Calendar.current.startOfDay(for: Date())
+        midday = midday.addingTimeInterval(12 * 3600)
+
+        var percentage = 80.0
+        for minute in 0..<20 {
+            try await store.record(
+                snapshot(app: "Busy", energyNJ: 1_000, cpu: 5, percentage: percentage),
+                at: midday.addingTimeInterval(Double(minute) * 60))
+            percentage -= 0.5
+        }
+
+        let days = try await store.batteryDays(
+            from: midday.addingTimeInterval(-3600), to: midday.addingTimeInterval(7200))
+        #expect(days.count == 1)
+        #expect(days[0].sessions.count == 1)
+        #expect(days[0].isFragmented == false)
+        #expect(days[0].percentagePerHour != nil)
+    }
+
+    /// Too little observed time must report no rate at all rather than dividing by a
+    /// few seconds and claiming a confident absurdity.
+    @Test("A barely-observed day reports no hourly rate")
+    func shortDayHasNoRate() async throws {
+        let store = try HistoryStore(url: temporaryURL())
+        var midday = Calendar.current.startOfDay(for: Date())
+        midday = midday.addingTimeInterval(12 * 3600)
+
+        try await store.record(
+            snapshot(app: "Busy", energyNJ: 1_000, cpu: 5, percentage: 50), at: midday)
+        try await store.record(
+            snapshot(app: "Busy", energyNJ: 1_000, cpu: 5, percentage: 49),
+            at: midday.addingTimeInterval(60))
+
+        let days = try await store.batteryDays(
+            from: midday.addingTimeInterval(-3600), to: midday.addingTimeInterval(7200))
+        #expect(days[0].percentagePerHour == nil)
+    }
+
 }
