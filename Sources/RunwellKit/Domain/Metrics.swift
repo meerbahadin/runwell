@@ -91,7 +91,7 @@ public struct MonotonicInstant: Sendable, Hashable, Comparable {
 
 /// One process's metrics over one validated interval. Every field carries its own
 /// provenance because collectors fail independently (Section 4).
-public struct ProcessIntervalMetrics: Sendable {
+public struct ProcessIntervalMetrics: Sendable, Equatable {
     public let key: ProcessKey
     public let identity: ProcessIdentity
     public let intervalSeconds: Double

@@ -68,7 +68,7 @@ public enum UnavailableReason: String, Codable, Sendable {
 ///
 /// `value` is optional and `provenance` is independent of it: a present value can
 /// still be `.experimental`, and an absent one always carries a reason.
-public struct IntervalMetric<Value: Sendable>: Sendable {
+public struct IntervalMetric<Value: Sendable & Equatable>: Sendable, Equatable {
     public let value: Value?
     public let provenance: MetricProvenance
     public let confidence: Double

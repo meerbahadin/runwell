@@ -2,7 +2,7 @@ import Foundation
 
 /// Section 6. An application-level row: the signature feature. A correct total for
 /// Chrome or Xcode is more useful than a flat list of renderers and helpers.
-public struct ApplicationGroup: Sendable, Identifiable {
+public struct ApplicationGroup: Sendable, Identifiable, Equatable {
     public let id: ApplicationGroupID
     public let displayName: String
     public let bundleURL: URL?
@@ -116,7 +116,7 @@ private func zip3<A, B>(_ a: A?, _ b: B?) -> (A, B)? {
 }
 
 /// Section 8.2 / 8.3. A short, honest state label for the row.
-public enum ApplicationStatus: String, Sendable {
+public enum ApplicationStatus: String, Sendable, Equatable {
     case normal
     case highEnergy
     case backgroundActivity
@@ -158,10 +158,21 @@ public struct EnergyCoverage: Sendable {
         self.groups = groups
         self.accessibleEnergyNJ = accessibleEnergyNJ
         self.inaccessibleProcessCount = inaccessibleProcessCount
+        self.readableProcessCount = groups.reduce(0) { $0 + $1.processCount }
+        self.coverageConfidence = {
+            let readable = groups.reduce(0) { $0 + $1.processCount }
+            guard inaccessibleProcessCount > 0 else { return readable > 0 ? 1.0 : 0 }
+            return Double(readable) / Double(readable + inaccessibleProcessCount)
+        }()
     }
 
     /// Number of processes Runwell could actually read this interval.
-    public var readableProcessCount: Int { groups.reduce(0) { $0 + $1.processCount } }
+    ///
+    /// Computed once at construction, not on every access: this reduces over every
+    /// group, and `measuredAppShare` reads it through `coverageConfidence` — which
+    /// the application list calls once per row. Recomputing made that O(n²) over
+    /// ~166 groups, costing about 3.4 ms per frame before SwiftUI laid out anything.
+    public let readableProcessCount: Int
 
     /// The fraction of the machine's processes this interval could see at all.
     ///
@@ -173,11 +184,7 @@ public struct EnergyCoverage: Sendable {
     /// with 178–267 processes unreadable, which is why it must never be a constant:
     /// persisting a fixed 0.85 for every row (as this used to) is a fabricated
     /// precision signal, the Appendix F sin one level up from a fabricated zero.
-    public var coverageConfidence: Double {
-        let readable = readableProcessCount
-        guard inaccessibleProcessCount > 0 else { return readable > 0 ? 1.0 : 0 }
-        return Double(readable) / Double(readable + inaccessibleProcessCount)
-    }
+    public let coverageConfidence: Double
 
     /// Section 3.2: `measuredAppShare = appDeltaEnergyNJ / sum(allAccessibleProcessDeltaEnergyNJ)`.
     ///

@@ -44,8 +44,11 @@ struct ApplicationsView: View {
                         group: group,
                         isExpanded: expanded.contains(group.id),
                         share: environment.snapshot?.coverage.measuredAppShare(of: group),
+                        normalizeCPU: environment.normalizeCPU,
+                        coreCount: environment.capabilities.logicalProcessorCount,
                         onToggle: { toggle(group) }
                     )
+                    .equatable()
                     .background(environment.selectedGroupID == group.id ? Color.accentColor.opacity(0.12) : .clear)
                     .contentShape(Rectangle())
                     .onTapGesture { environment.selectedGroupID = group.id }
@@ -91,13 +94,26 @@ struct ApplicationsView: View {
 
 /// Section 8.2. One application row, with an expandable process tree (Section 1.3:
 /// apps before processes, but always reversible).
-struct ApplicationRow: View {
+struct ApplicationRow: View, Equatable {
     let group: ApplicationGroup
     let isExpanded: Bool
     let share: IntervalMetric<Double>?
+    /// Passed in rather than read from `@Environment`. Observing the whole
+    /// AppEnvironment made every row a dependency of every property on it, so any
+    /// change re-rendered all ~166 rows; the row only needs these two values to
+    /// format CPU. With them as plain inputs the row is Equatable, and SwiftUI can
+    /// skip rows whose data did not change between sampler cycles.
+    let normalizeCPU: Bool
+    let coreCount: Int
     let onToggle: () -> Void
 
-    @Environment(AppEnvironment.self) private var environment
+    nonisolated static func == (lhs: ApplicationRow, rhs: ApplicationRow) -> Bool {
+        lhs.group == rhs.group
+            && lhs.isExpanded == rhs.isExpanded
+            && lhs.share == rhs.share
+            && lhs.normalizeCPU == rhs.normalizeCPU
+            && lhs.coreCount == rhs.coreCount
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -160,8 +176,8 @@ struct ApplicationRow: View {
                 MetricText(metric: group.totalEnergyWatts, format: "%.2f", suffix: " W")
                     .frame(width: 90, alignment: .trailing)
                 MetricText(
-                    metric: displayCPU(group.totalCPUPercent, normalize: environment.normalizeCPU,
-                                      coreCount: environment.capabilities.logicalProcessorCount),
+                    metric: displayCPU(group.totalCPUPercent, normalize: normalizeCPU,
+                                      coreCount: coreCount),
                     format: "%.1f", suffix: "%"
                 )
                     .frame(width: 70, alignment: .trailing)
@@ -182,7 +198,8 @@ struct ApplicationRow: View {
 
             if isExpanded {
                 ForEach(group.members, id: \.key) { member in
-                    ProcessSubRow(metrics: member)
+                    ProcessSubRow(metrics: member, normalizeCPU: normalizeCPU,
+                                  coreCount: coreCount)
                 }
             }
         }
@@ -195,8 +212,8 @@ struct ApplicationRow: View {
         if group.processCount > 1 { parts.append("\(group.processCount) processes") }
         parts.append("Energy \(group.totalEnergyWatts.formatted("%.2f", suffix: " watts")), \(group.totalEnergyWatts.provenance.badge)")
         // VoiceOver should say the same number that is on screen.
-        let cpu = displayCPU(group.totalCPUPercent, normalize: environment.normalizeCPU,
-                             coreCount: environment.capabilities.logicalProcessorCount)
+        let cpu = displayCPU(group.totalCPUPercent, normalize: normalizeCPU,
+                             coreCount: coreCount)
         parts.append("CPU \(cpu.formatted("%.1f", suffix: " percent"))")
         if let bytes = group.totalFootprintBytes.value {
             parts.append("Memory \(ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .memory))")
@@ -209,8 +226,8 @@ struct ApplicationRow: View {
 /// A child process inside an expanded application group.
 struct ProcessSubRow: View {
     let metrics: ProcessIntervalMetrics
-
-    @Environment(AppEnvironment.self) private var environment
+    let normalizeCPU: Bool
+    let coreCount: Int
 
     var body: some View {
         HStack(spacing: 12) {
@@ -230,8 +247,8 @@ struct ProcessSubRow: View {
             MetricText(metric: metrics.energyWatts, format: "%.2f", suffix: " W")
                 .frame(width: 90, alignment: .trailing)
             MetricText(
-                metric: displayCPU(metrics.cpuPercent, normalize: environment.normalizeCPU,
-                                   coreCount: environment.capabilities.logicalProcessorCount),
+                metric: displayCPU(metrics.cpuPercent, normalize: normalizeCPU,
+                                   coreCount: coreCount),
                 format: "%.1f", suffix: "%"
             )
                 .frame(width: 70, alignment: .trailing)

@@ -173,6 +173,7 @@ final class AppEnvironment {
 
     private func apply(_ snapshot: SamplerSnapshot) {
         self.snapshot = snapshot
+        snapshotGeneration &+= 1
         evaluateInsights(snapshot)
         // Section 7.2: persistence happens off the main actor, so the UI is never
         // waiting on a disk write.
@@ -274,7 +275,46 @@ final class AppEnvironment {
 
     // MARK: - Derived view state
 
+    /// Inputs that change the visible ordering. Cheap to compare, and enough to know
+    /// whether the cached list can stand.
+    private struct GroupsKey: Equatable {
+        let generation: UInt64
+        let search: String
+        let sort: SortColumn
+        let frozen: Bool
+    }
+
+    /// Bumped whenever a new snapshot is applied. SamplerSnapshot is a value type
+    /// with no per-cycle identity of its own, so rather than infer one from its
+    /// contents, the one place that installs a snapshot says explicitly that the
+    /// derived list is stale.
+    private var snapshotGeneration: UInt64 = 0
+    private var cachedGroupsKey: GroupsKey?
+    private var cachedGroups: [ApplicationGroup] = []
+
+    /// The filtered, sorted list the application table renders.
+    ///
+    /// Cached rather than recomputed per access. This filters, and sorts ~166 groups,
+    /// and while the pointer is over the table it also builds a position dictionary
+    /// over the frozen order — and with @Observable, every read from a view body runs
+    /// the whole thing again. A single frame touches this from the table, the menu
+    /// bar's top-five and any other observer, so the work was being repeated several
+    /// times per frame for a list that only changes once per sampler cycle.
     var groups: [ApplicationGroup] {
+        let key = GroupsKey(
+            generation: snapshotGeneration,
+            search: searchText,
+            sort: sortOrder,
+            frozen: isPointerOverTable && frozenOrder != nil
+        )
+        if let cachedGroupsKey, cachedGroupsKey == key { return cachedGroups }
+        let result = computeGroups()
+        cachedGroupsKey = key
+        cachedGroups = result
+        return result
+    }
+
+    private func computeGroups() -> [ApplicationGroup] {
         guard let snapshot else { return [] }
         var result = snapshot.groups
 

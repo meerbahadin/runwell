@@ -181,4 +181,48 @@ struct RejectionTests {
         #expect(!metrics.energyWatts.isAvailable)
         #expect(metrics.energyWatts.formatted() == "—")
     }
+
+    /// `coverageConfidence` and `readableProcessCount` are stored, not computed:
+    /// `measuredAppShare` reads them once per row in the application list, and
+    /// reducing over every group on each access made that O(n^2) — about 3.4 ms per
+    /// frame at 166 groups. Storing them must not change what they report.
+    @Test("Stored coverage matches the ratio it replaced")
+    func storedCoverageMatchesFormula() {
+        func group(_ name: String, processes: Int) -> ApplicationGroup {
+            let id = ProcessIdentity(
+                key: ProcessKey(pid: 1, startAbsoluteTime: 1), name: name,
+                executable: nil, parentPID: 1, userID: 501,
+                groupID: ApplicationGroupID(bundle: "com.example.\(name)"),
+                groupDisplayName: name, groupingReason: .bundleOwnership,
+                bundleURL: nil, isPrincipalProcess: true)
+            let members = (0..<processes).map { _ in
+                ProcessIntervalMetrics(
+                    key: id.key, identity: id, intervalSeconds: 2,
+                    cpuPercent: .derived(1), physicalFootprintBytes: .measured(1024),
+                    energyWatts: .derived(0.1), energyDeltaNJ: 1_000,
+                    diskReadBytesPerSecond: .derived(0),
+                    diskWriteBytesPerSecond: .derived(0), wakeupsPerSecond: .derived(0))
+            }
+            return ApplicationGroup(id: id.groupID, displayName: name,
+                                    bundleURL: nil, members: members, status: .normal)
+        }
+
+        let groups = [group("A", processes: 2), group("B", processes: 1)]
+        let coverage = EnergyCoverage(groups: groups, accessibleEnergyNJ: 3_000,
+                                      inaccessibleProcessCount: 3)
+        #expect(coverage.readableProcessCount == 3)
+        #expect(abs(coverage.coverageConfidence - 0.5) < 0.001)
+        #expect(abs(coverage.measuredAppShare(of: groups[0]).confidence - 0.5) < 0.001)
+
+        // Nothing unreadable means full coverage, not a discounted constant.
+        let full = EnergyCoverage(groups: groups, accessibleEnergyNJ: 3_000,
+                                  inaccessibleProcessCount: 0)
+        #expect(abs(full.coverageConfidence - 1.0) < 0.001)
+
+        // No readable processes at all is zero coverage, never a fabricated 1.0.
+        let empty = EnergyCoverage(groups: [], accessibleEnergyNJ: 0,
+                                   inaccessibleProcessCount: 0)
+        #expect(empty.coverageConfidence == 0)
+    }
+
 }
