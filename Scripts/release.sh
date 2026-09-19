@@ -9,7 +9,7 @@
 #   2. A "Developer ID Application" certificate in your login keychain
 #   3. A notarytool keychain profile, created once with:
 #        xcrun notarytool store-credentials runwell-notary \
-#          --apple-id you@example.com --team-id 728Q4KSP8P --password APP-SPECIFIC-PASSWORD
+#          --apple-id you@example.com --team-id YOUR_TEAM_ID --password APP-SPECIFIC-PASSWORD
 #
 # Usage: Scripts/release.sh "Developer ID Application: Your Name (TEAMID)"
 set -euo pipefail
@@ -91,6 +91,12 @@ xcrun stapler validate "$DMG"
 
 echo "==> Verifying Gatekeeper acceptance"
 spctl -a -vvv -t open --context context:primary-signature "$DMG"
+
+# The .app has served its purpose once it is inside the signed, notarized image.
+# Leaving it behind invites distributing the loose bundle by accident, and only the
+# DMG has been through Gatekeeper verification as a whole.
+echo "==> Removing the intermediate app bundle"
+rm -rf "$APP"
 
 echo
 echo "Ready to ship: $DMG"

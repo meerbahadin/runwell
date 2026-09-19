@@ -2,3 +2,8 @@
 .build/
 build/
 .vscode/
+
+# Local agent/skill tooling: developer environment, not part of the app.
+.agents/
+.claude/
+skills-lock.json
