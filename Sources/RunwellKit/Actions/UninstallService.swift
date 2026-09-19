@@ -194,6 +194,13 @@ public struct UninstallService: Sendable {
 
         for (relative, kind) in candidates {
             let url = library.appendingPathComponent(relative)
+            // macOS 27 treats another app's container and application-support data
+            // as protected, so this both misses files and posts a "Data Access
+            // Blocked" notice unless the user has granted access. A miss is the
+            // correct failure: the list then shows only what was really seen, and
+            // `residue.count == 1` already tells the user nothing else was found.
+            // Runwell does not ask for Full Disk Access to make this exhaustive —
+            // an uninstaller is not worth that privilege.
             guard FileManager.default.fileExists(atPath: url.path) else { continue }
             items.append(Residue(url: url, kind: kind, sizeBytes: directorySize(of: url)))
         }

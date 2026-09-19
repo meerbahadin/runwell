@@ -46,6 +46,7 @@ struct HistoryView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
+                SectionHeading("History")
                 if environment.history == nil {
                     historyDisabled
                 } else if isLoading {
@@ -68,7 +69,6 @@ struct HistoryView: View {
             .padding(Theme.Spacing.section)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .navigationTitle("History")
         .task(id: range) { await load() }
         // Refresh as new samples land, without hammering the database every cycle.
         .task(id: range) {
@@ -133,14 +133,14 @@ struct HistoryView: View {
         VStack(alignment: .leading, spacing: Theme.Spacing.tight + 2) {
             if let top = breakdown?.rows.first, let share = breakdown?.share(of: top), share > 0 {
                 Text(headlineText(top: top, share: share, drop: drop))
-                    .font(.title3)
+                    .font(Theme.Typography.title)
                     .fixedSize(horizontal: false, vertical: true)
             } else if let drop, drop > 0 {
                 Text("Your battery went down \(Int(drop))% in the last \(range.rawValue.lowercased()).")
-                    .font(.title3)
+                    .font(Theme.Typography.title)
             } else {
                 Text("Nothing has used a noticeable amount of energy in the last \(range.rawValue.lowercased()).")
-                    .font(.title3)
+                    .font(Theme.Typography.title)
             }
         }
         .fixedSize(horizontal: false, vertical: true)
@@ -169,11 +169,11 @@ struct HistoryView: View {
     private var batteryChart: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.row + 2) {
             HStack(alignment: .firstTextBaseline) {
-                Text("Battery level").font(.title3.weight(.semibold))
+                Text("Battery level").font(Theme.Typography.title)
                 Spacer()
                 if let drop = batteryDrop, drop > 0 {
                     Text("Down \(Int(drop))%")
-                        .font(.callout).foregroundStyle(.secondary).monospacedDigit()
+                        .font(Theme.Typography.callout).foregroundStyle(.secondary).monospacedDigit()
                 }
             }
 
@@ -321,7 +321,7 @@ struct HistoryView: View {
     private var episodesSection: some View {
         if !episodes.isEmpty {
             VStack(alignment: .leading, spacing: Theme.Spacing.row + 2) {
-                Text("What kept your Mac busy").font(.title3.weight(.semibold))
+                Text("What kept your Mac busy").font(Theme.Typography.title)
 
                 VStack(alignment: .leading, spacing: Theme.Spacing.row) {
                     ForEach(episodes) { episode in
@@ -344,7 +344,7 @@ struct HistoryView: View {
                     .fontWeight(.medium)
                     .fixedSize(horizontal: false, vertical: true)
                 Text(episodeTiming(episode))
-                    .font(.callout)
+                    .font(Theme.Typography.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -353,7 +353,7 @@ struct HistoryView: View {
             if episode.ended == nil {
                 // A condition that has not lapsed is still happening now.
                 Text("Now")
-                    .font(.caption)
+                    .font(Theme.Typography.caption)
                     .padding(.horizontal, Theme.Spacing.row)
                     .padding(.vertical, 2)
                     .background(.quaternary, in: Capsule())
@@ -380,10 +380,10 @@ struct HistoryView: View {
     @ViewBuilder
     private var sessionsSection: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.row + 2) {
-            Text("Time on battery").font(.title3.weight(.semibold))
+            Text("Time on battery").font(Theme.Typography.title)
             if days.isEmpty {
                 Text("Your Mac has been plugged in for this whole period.")
-                    .font(.callout).foregroundStyle(.secondary)
+                    .font(Theme.Typography.callout).foregroundStyle(.secondary)
             } else {
                 // Grouped by day rather than listed as raw runs. With the lid closed
                 // macOS dark-wakes every 15–20 minutes, and each wake is its own run
@@ -397,7 +397,7 @@ struct HistoryView: View {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(dayTitle(day.date)).fontWeight(.medium)
                                 Text(daySummary(day))
-                                    .font(.callout).foregroundStyle(.secondary)
+                                    .font(Theme.Typography.callout).foregroundStyle(.secondary)
                                     .fixedSize(horizontal: false, vertical: true)
                             }
                             Spacer()
@@ -458,11 +458,11 @@ struct HistoryView: View {
                 // "What used the most energy" implied the whole machine. These rows
                 // only ever covered measurable applications — Section 3.1 mandates
                 // the narrower claim, and the wording now matches what is counted.
-                Text("Which apps used the most energy").font(.title3.weight(.semibold))
+                Text("Which apps used the most energy").font(Theme.Typography.title)
                 Spacer()
                 if let breakdown, !breakdown.rows.isEmpty {
                     Text("\(breakdown.rows.count) apps")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(Theme.Typography.caption).foregroundStyle(.secondary)
                 }
             }
 
@@ -476,7 +476,7 @@ struct HistoryView: View {
                 .cardSurface()
             } else {
                 Text("Nothing measurable yet.")
-                    .font(.callout).foregroundStyle(.secondary)
+                    .font(Theme.Typography.callout).foregroundStyle(.secondary)
             }
         }
     }
@@ -495,13 +495,13 @@ struct HistoryView: View {
         let percent = Int(((breakdown.coverage ?? 0) * 100).rounded())
         return HStack(alignment: .firstTextBaseline, spacing: 6) {
             Image(systemName: "info.circle")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(Theme.Typography.caption).foregroundStyle(.secondary)
                 .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 3 }
             Text("Shares are of the energy Runwell could measure — about \(percent)% of "
                  + "processes. macOS does not report energy for system processes like "
                  + "the kernel and window server, so real battery use is higher than "
                  + "these totals.")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(Theme.Typography.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(.top, 2)
@@ -525,7 +525,7 @@ struct HistoryView: View {
                     // counter carries, so this marks genuinely partial coverage rather
                     // than firing on every row and becoming noise.
                     Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.caption2).foregroundStyle(.orange)
+                        .font(Theme.Typography.caption).foregroundStyle(.orange)
                         .help("Some processes in this app could not be read, so this is a partial total.")
                 }
                 Spacer()
@@ -546,7 +546,7 @@ struct HistoryView: View {
             .frame(height: 6)
 
             Text(comparison(row))
-                .font(.callout).foregroundStyle(.secondary)
+                .font(Theme.Typography.callout).foregroundStyle(.secondary)
         }
         .padding(.vertical, 2)
         .accessibilityElement(children: .combine)
@@ -584,7 +584,7 @@ struct HistoryView: View {
     /// instead of hedging every number above it.
     private var footnote: some View {
         Text("These shares compare apps with each other. They do not add up to your whole battery — the screen, Wi-Fi and macOS itself also use power, and Runwell cannot measure every process.")
-            .font(.callout)
+            .font(Theme.Typography.callout)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
             .padding(.top, 4)

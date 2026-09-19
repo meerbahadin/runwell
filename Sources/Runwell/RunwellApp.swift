@@ -15,7 +15,13 @@ struct RunwellApp: App {
     static let mainWindowID = "runwell.main"
 
     var body: some Scene {
-        WindowGroup(id: Self.mainWindowID) {
+        // `Window` rather than `WindowGroup`, as Tidely uses. A WindowGroup with no
+        // title set leaves macOS showing the app name in its own reserved band at
+        // the top of the content column — a strip that starts at the sidebar's
+        // trailing edge instead of spanning the window, so it reads as offset. A
+        // single titled Window also matches what this app is: there is one main
+        // surface, and opening a second copy of it was never meaningful.
+        Window("Runwell", id: Self.mainWindowID) {
             RootView()
                 .environment(environment)
                 .frame(minWidth: 820, minHeight: 520)
@@ -29,6 +35,12 @@ struct RunwellApp: App {
                     OnboardingView(capabilities: environment.capabilities) {
                         environment.hasCompletedOnboarding = true
                     }
+                    // A sheet paints its own opaque surface, which showed as a flat
+                    // white slab behind the card. Tidely shows onboarding inline in
+                    // the window, so the card floats on the window's own material;
+                    // using that material here gives the same result while keeping
+                    // the sheet's behaviour.
+                    .presentationBackground(.regularMaterial)
                     // The introduction explains the app; dismissing it by clicking
                     // away would skip that, so it is finished with the button.
                     .interactiveDismissDisabled()
@@ -44,8 +56,14 @@ struct RunwellApp: App {
                 // Section 5.1: closing the window drops the sampling cadence rather
                 // than stopping history, so a closed lid still records.
                 .onDisappear { background?.windowBecameHidden() }
+                .background(FullHeightSidebar())
         }
-        .windowToolbarStyle(.unified)
+        // Deliberately no `.windowToolbarStyle(.unified)`. The unified style paints
+        // its own flat toolbar surface, which replaces the standard window material
+        // — the material is what produces the translucent "liquid glass" look on
+        // macOS 26 and later. With it set, the sidebar and toolbar render opaque.
+        // The default style keeps the material, and the views below avoid painting
+        // over it.
         .commands {
             CommandGroup(replacing: .newItem) {}
         }
@@ -67,6 +85,10 @@ struct RunwellApp: App {
 struct RootView: View {
     @Environment(AppEnvironment.self) private var environment
     @State private var selection: Surface = .overview
+    /// Owned here rather than inside the view, because the uninstall list and its
+    /// detail pane are two separate columns of the split view and must agree on
+    /// what is selected.
+    @State private var uninstallModel = UninstallModel()
 
     /// Section 8.1 information architecture.
     enum Surface: String, CaseIterable, Identifiable {
@@ -78,24 +100,58 @@ struct RootView: View {
         case settings = "Settings"
         var id: String { rawValue }
 
+        /// Filled glyphs of an even visual weight, as in Tidely. The previous set
+        /// mixed a detailed outline gauge with flat line symbols, so the sidebar
+        /// read as unevenly weighted rather than as one set.
         var symbol: String {
             switch self {
-            case .overview: "gauge.with.dots.needle.bottom.50percent"
-            case .applications: "list.bullet.rectangle"
-            case .history: "chart.xyaxis.line"
+            case .overview: "square.grid.2x2"
+            case .applications: "square.stack.3d.up"
+            case .history: "clock.arrow.circlepath"
             case .uninstall: "trash"
-            case .diagnostics: "stethoscope"
+            case .diagnostics: "waveform.path.ecg"
             case .settings: "gearshape"
             }
         }
     }
 
     private var surfaceList: some View {
-        List(Surface.allCases, selection: $selection) { surface in
-            Label(surface.rawValue, systemImage: surface.symbol)
-                .tag(surface)
+        VStack(alignment: .leading, spacing: 0) {
+            brand
+                .padding(.horizontal, Theme.Spacing.lg)
+                // The sidebar now runs under the titlebar, so the wordmark has to
+                // clear the traffic lights rather than sitting beneath a strip that
+                // was reserving that space for it.
+                .padding(.top, Theme.Spacing.xxxl)
+                .padding(.bottom, Theme.Spacing.lg)
+
+            List(Surface.allCases, selection: $selection) { surface in
+                Label(surface.rawValue, systemImage: surface.symbol)
+                    .tag(surface)
+            }
+            // The sidebar style is what renders selection as the translucent
+            // capsule over the window material rather than a flat filled
+            // rectangle; hiding the scroll background stops the list painting
+            // over that material.
+            .listStyle(.sidebar)
+            .scrollContentBackground(.hidden)
         }
-        .navigationSplitViewColumnWidth(min: 170, ideal: 190, max: 240)
+        // No background: a sidebar inside NavigationSplitView already gets the
+        // system's translucent material. Painting over it produces the flat,
+        // opaque look and loses the vibrancy behind the selection highlight.
+        .navigationSplitViewColumnWidth(min: 200, ideal: 216, max: 260)
+    }
+
+    /// Wordmark only: the icon is already in the Dock and the title bar, and a third
+    /// copy of it in the sidebar competed with the section glyphs below rather than
+    /// anchoring them.
+    private var brand: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Runwell").font(Theme.Typography.headline)
+            Text("Honest battery monitoring")
+                .font(Theme.Typography.caption)
+                .foregroundStyle(Theme.Colors.faintText)
+        }
     }
 
     var body: some View {
@@ -106,7 +162,7 @@ struct RootView: View {
         // made AppKit reserve an extra column, which is what left the dead gutter
         // beside the detail content and squeezed the application table to a sliver.
         switch selection {
-        case .overview, .history, .uninstall, .diagnostics, .settings:
+        case .overview, .history, .diagnostics, .settings:
             // These surfaces have no per-row detail, so each takes the full width
             // beside the sidebar instead of stranding an empty third column.
             NavigationSplitView {
@@ -114,12 +170,29 @@ struct RootView: View {
             } detail: {
                 switch selection {
                 case .history: HistoryView()
-                case .uninstall: UninstallView()
                 case .diagnostics: DiagnosticsView()
                 case .settings: SettingsView()
                 default: OverviewView()
                 }
             }
+            // Tidely uses the balanced style: the sidebar keeps the window's own
+            // material instead of the prominent style's opaque panel, which is what
+            // leaves a hard seam between an opaque sidebar and white content.
+            .navigationSplitViewStyle(.balanced)
+        case .uninstall:
+            // Same three-column shape as Applications: a list of things on the left
+            // and what is selected on the right. Putting this in the two-column case
+            // instead left the split view sizing itself to its content, which is
+            // what floated the list in the middle of an empty pane.
+            NavigationSplitView {
+                surfaceList
+            } content: {
+                UninstallListView(model: uninstallModel)
+                    .navigationSplitViewColumnWidth(min: 260, ideal: 320)
+            } detail: {
+                UninstallDetailView(model: uninstallModel)
+            }
+            .navigationSplitViewStyle(.balanced)
         case .applications:
             NavigationSplitView {
                 surfaceList
@@ -181,6 +254,39 @@ extension NSWindow {
     var isRunwellMainWindow: Bool {
         // Menu-bar extras and popovers are panels; the document window is not.
         !(self is NSPanel) && contentViewController != nil && canBecomeMain
+    }
+}
+
+/// Lets the sidebar's material run the full height of the window, including behind
+/// the titlebar.
+///
+/// SwiftUI otherwise reserves an opaque titlebar strip across the content column
+/// only — it begins at the sidebar's trailing edge rather than at the window's, so
+/// it reads as a band shifted to the right, with the traffic lights stranded above
+/// the sidebar in a differently-coloured area. Hiding the title text and making the
+/// titlebar transparent lets the split view own the whole window, which is how the
+/// full-height sidebar look is actually produced.
+private struct FullHeightSidebar: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        DispatchQueue.main.async { configure(view.window) }
+        return view
+    }
+
+    func updateNSView(_ view: NSView, context: Context) {
+        // The window is nil on the first pass and can change if the view is
+        // re-hosted, so this re-applies rather than assuming makeNSView caught it.
+        configure(view.window)
+    }
+
+    private func configure(_ window: NSWindow?) {
+        guard let window, window.isRunwellMainWindow else { return }
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
+        // Keep the titlebar itself: removing it (`.fullSizeContentView` alone, or
+        // `.hiddenTitleBar`) also removes the standard window material, which is
+        // what produces the translucency in the first place.
+        window.styleMask.insert(.fullSizeContentView)
     }
 }
 
@@ -255,8 +361,9 @@ struct MenuBarContent: View {
                     NSApp.setActivationPolicy(.regular)
                     NSApp.activate(ignoringOtherApps: true)
                     // Raise the window that already exists rather than asking for
-                    // another one: WindowGroup will happily open a second, third and
-                    // fourth copy, and pressing the menu item twice should not.
+                    // another one. `Window` is single-instance so this can no longer
+                    // produce duplicates, but reopening a closed window and raising
+                    // an open one are still different operations.
                     if let existing = NSApp.windows.first(where: \.isRunwellMainWindow) {
                         existing.makeKeyAndOrderFront(nil)
                     } else {

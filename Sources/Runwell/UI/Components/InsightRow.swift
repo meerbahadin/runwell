@@ -32,7 +32,7 @@ struct InsightRow: View {
                     .fontWeight(.medium)
                     .fixedSize(horizontal: false, vertical: true)
                 Text(insight.evidence)
-                    .font(.caption)
+                    .font(Theme.Typography.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -46,7 +46,7 @@ struct InsightRow: View {
             if let group, onQuit != nil {
                 Button("Quit") { confirmingQuit = true }
                     .buttonStyle(.plain)
-                    .font(.caption)
+                    .font(Theme.Typography.caption)
                     .foregroundStyle(isHovering ? .primary : .secondary)
                     .padding(.horizontal, Theme.Spacing.row)
                     .padding(.vertical, Theme.Spacing.tight)
@@ -71,7 +71,7 @@ struct InsightRow: View {
             // gave no sign it could be clicked; it now reveals itself on hover.
             Button("Ignore", action: onIgnore)
                 .buttonStyle(.plain)
-                .font(.caption)
+                .font(Theme.Typography.caption)
                 .foregroundStyle(isHovering ? .primary : .secondary)
                 .padding(.horizontal, Theme.Spacing.row)
                 .padding(.vertical, Theme.Spacing.tight)

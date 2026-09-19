@@ -74,11 +74,14 @@ struct ApplicationsView: View {
             Text("Memory").frame(width: 90, alignment: .trailing)
             Text("Status").frame(width: 150, alignment: .leading)
         }
-        .font(.caption.weight(.semibold))
-        .foregroundStyle(.secondary)
+        .font(Theme.Typography.caption)
+        .foregroundStyle(Theme.Colors.subtleText)
         .padding(.horizontal, 16)
         .padding(.vertical, 6)
-        .background(.bar)
+        // `.bar` is opaque and read as a white band cutting across the window.
+        // A thin material keeps the header legible over scrolling rows while the
+        // window's own translucency still shows through.
+        .background(.ultraThinMaterial)
     }
 
     private func toggle(_ group: ApplicationGroup) {
@@ -122,7 +125,7 @@ struct ApplicationRow: View, Equatable {
                     if group.processCount > 1 {
                         Button(action: onToggle) {
                             Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                                .font(.caption)
+                                .font(Theme.Typography.caption)
                                 .foregroundStyle(.secondary)
                                 .frame(width: 12)
                         }
@@ -149,7 +152,7 @@ struct ApplicationRow: View, Equatable {
                         // counted, fits and still reads.
                         Label("\(group.processCount)", systemImage: "square.stack.3d.up")
                             .labelStyle(.titleAndIcon)
-                            .font(.caption)
+                            .font(Theme.Typography.caption)
                             .monospacedDigit()
                             .lineLimit(1)
                             .fixedSize()
@@ -190,7 +193,7 @@ struct ApplicationRow: View, Equatable {
                 }
                 .frame(width: 150, alignment: .leading)
             }
-            .font(.callout)
+            .font(Theme.Typography.callout)
             .padding(.horizontal, 16)
             .padding(.vertical, 5)
             .accessibilityElement(children: .combine)
@@ -238,7 +241,7 @@ struct ProcessSubRow: View {
                     .truncationMode(.middle)
                     .foregroundStyle(.secondary)
                 Text("PID \(metrics.identity.key.pid)")
-                    .font(.caption2)
+                    .font(Theme.Typography.caption)
                     .monospacedDigit()
                     .foregroundStyle(.tertiary)
             }
@@ -258,13 +261,13 @@ struct ProcessSubRow: View {
             // Section 6: grouping must be explainable — this says why the process
             // was placed in this application.
             Text(metrics.identity.groupingReason.explanation)
-                .font(.caption2)
+                .font(Theme.Typography.caption)
                 .foregroundStyle(.tertiary)
                 .lineLimit(1)
                 .frame(width: 150, alignment: .leading)
                 .help(metrics.identity.groupingReason.explanation)
         }
-        .font(.caption)
+        .font(Theme.Typography.caption)
         .padding(.horizontal, 16)
         .padding(.vertical, 3)
         .background(.quaternary.opacity(0.25))

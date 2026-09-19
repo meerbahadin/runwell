@@ -143,39 +143,39 @@ struct ProcessDetailView: View {
 
     private func metricCell(_ title: String, _ content: some View) -> some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text(title).font(.caption).foregroundStyle(.secondary)
+            Text(title).font(Theme.Typography.caption).foregroundStyle(.secondary)
             // The badge beside every number was more clutter than information: it
             // repeated on each cell and said "Derived" about values that are always
             // derived. Provenance still governs what is shown — an unavailable
             // reading is an em dash, never a zero — and Diagnostics reports each
             // collector's provenance in full.
-            content.font(.title3)
+            content.font(Theme.Typography.title)
         }
     }
 
     private var processList: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Processes").font(.headline)
+            Text("Processes").font(Theme.Typography.headline)
             // Section 6: grouping is reversible and explainable here.
             ForEach(group.members, id: \.key) { member in
                 VStack(alignment: .leading, spacing: 4) {
                     HStack {
                         Text(member.identity.name).fontWeight(.medium)
                         Text("PID \(member.identity.key.pid)")
-                            .font(.caption).monospacedDigit().foregroundStyle(.secondary)
+                            .font(Theme.Typography.caption).monospacedDigit().foregroundStyle(.secondary)
                         Spacer()
                         MetricText(metric: member.energyWatts, format: "%.2f", suffix: " W")
-                            .font(.callout)
+                            .font(Theme.Typography.callout)
                         MetricText(
                             metric: displayCPU(member.cpuPercent, normalize: environment.normalizeCPU,
                                                coreCount: environment.capabilities.logicalProcessorCount),
                             format: "%.1f", suffix: "%"
                         )
-                            .font(.callout).frame(width: 60, alignment: .trailing)
+                            .font(Theme.Typography.callout).frame(width: 60, alignment: .trailing)
                     }
                     HStack(spacing: 8) {
                         Text(member.identity.groupingReason.explanation)
-                            .font(.caption).foregroundStyle(.secondary)
+                            .font(Theme.Typography.caption).foregroundStyle(.secondary)
                         Spacer()
                         processActions(for: member)
                     }
@@ -194,7 +194,7 @@ struct ProcessDetailView: View {
                 // Section 8.4 / 9.2: protected processes are not offered at all, and
                 // the UI says why rather than silently disabling a button.
                 Label("Protected", systemImage: "lock.fill")
-                    .font(.caption)
+                    .font(Theme.Typography.caption)
                     .foregroundStyle(.secondary)
                     .help(reason)
             case .requiresConfirmation(let reason):

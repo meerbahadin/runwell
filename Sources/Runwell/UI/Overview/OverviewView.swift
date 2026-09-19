@@ -15,6 +15,7 @@ struct OverviewView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
+                SectionHeading("Overview")
                 batterySection
                 Divider()
                 topDrainSection
@@ -27,7 +28,6 @@ struct OverviewView: View {
             .padding(20)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .navigationTitle("Overview")
         // A quit that was partly or wholly refused must say so: the policy protects
         // system processes and Runwell itself, and silence would read as a bug.
         .alert(
@@ -109,7 +109,7 @@ struct OverviewView: View {
 
         VStack(alignment: .leading, spacing: 10) {
             Text("Battery")
-                .font(.headline)
+                .font(Theme.Typography.headline)
 
             if let battery, battery.isPresent {
                 HStack(alignment: .firstTextBaseline, spacing: 12) {
@@ -118,9 +118,9 @@ struct OverviewView: View {
                         .monospacedDigit()
                     VStack(alignment: .leading, spacing: 4) {
                         Label(stateDescription(battery), systemImage: stateSymbol(battery))
-                            .font(.callout)
+                            .font(Theme.Typography.callout)
                         Text(timeDescription(battery))
-                            .font(.callout)
+                            .font(Theme.Typography.callout)
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
@@ -169,7 +169,7 @@ struct OverviewView: View {
     private var topDrainSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Using the most energy")
-                .font(.headline)
+                .font(Theme.Typography.headline)
 
             if environment.isWaitingForFirstInterval {
                 // Section 3: a rate needs two samples. Say so rather than showing zeros.
@@ -183,17 +183,17 @@ struct OverviewView: View {
                             .font(.title3.weight(.medium))
                         HStack(spacing: 6) {
                             MetricText(metric: top.totalEnergyWatts, format: "%.2f", suffix: " W")
-                                .font(.callout)
+                                .font(Theme.Typography.callout)
                             if top.processCount > 1 {
                                 Text("· \(top.processCount) processes")
-                                    .font(.callout)
+                                    .font(Theme.Typography.callout)
                                     .foregroundStyle(.secondary)
                             }
                         }
                         if let share = environment.snapshot?.coverage.measuredAppShare(of: top).value {
                             // Section 3.1 mandates this wording, not "battery used".
                             Text("\(EnergyCoverage.shareLabel): \(String(format: "%.0f%%", share * 100))")
-                                .font(.caption)
+                                .font(Theme.Typography.caption)
                                 .foregroundStyle(.secondary)
                         }
                     }
@@ -215,13 +215,13 @@ struct OverviewView: View {
     private var coverageSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Measurement coverage")
-                .font(.headline)
+                .font(Theme.Typography.headline)
 
             // Section 3.1: the display, radios, DRAM and kernel work are not
             // attributable to any app, so this must never be presented as a full
             // account of battery discharge.
             Text("Runwell can measure energy for the processes it is allowed to read. The display, radios and system services are not included, so these shares describe applications only — not your whole battery.")
-                .font(.callout)
+                .font(Theme.Typography.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
@@ -238,7 +238,7 @@ struct OverviewView: View {
                         HStack(spacing: 6) {
                             Text("\(unreadable)").monospacedDigit()
                             Text("system or other users")
-                                .font(.caption)
+                                .font(Theme.Typography.caption)
                                 .foregroundStyle(.secondary)
                         }
                     }
@@ -247,7 +247,7 @@ struct OverviewView: View {
                         Text(snapshot.mode.description)
                     }
                 }
-                .font(.callout)
+                .font(Theme.Typography.callout)
             }
         }
     }

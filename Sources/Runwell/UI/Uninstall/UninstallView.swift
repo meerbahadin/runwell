@@ -8,28 +8,23 @@ import RunwellKit
 /// and a size it could not measure reads as an em dash rather than "0 bytes" — the
 /// same rule the rest of the app applies to power measurements, applied here because
 /// the cost of overclaiming is a deleted file the user did not mean to remove.
-struct UninstallView: View {
-    @State private var model = UninstallModel()
+/// The left column: every application that can be uninstalled.
+///
+/// A column of a `NavigationSplitView`, like the application table, rather than a
+/// pane inside an `HSplitView`. HSplitView sizes itself to its content, which left
+/// the list floating small in the middle of an otherwise empty surface.
+struct UninstallListView: View {
+    @Bindable var model: UninstallModel
 
     var body: some View {
-        HSplitView {
+        VStack(alignment: .leading, spacing: 0) {
+            SectionHeading("Uninstall", subtitle: "Applications installed on this Mac")
+                .padding(.horizontal, Theme.Spacing.lg)
+                .padding(.top, Theme.Spacing.xl)
+                .padding(.bottom, Theme.Spacing.md)
             applicationList
-                .frame(minWidth: 240, idealWidth: 280)
-            detail
-                .frame(minWidth: 320)
         }
-        .navigationTitle("Uninstall")
-        .task { model.reload() }
-        .alert(
-            "Uninstall \(model.selected?.name ?? "")?",
-            isPresented: $model.isConfirming,
-            presenting: model.selected
-        ) { app in
-            Button("Cancel", role: .cancel) {}
-            Button("Move to Trash", role: .destructive) { model.confirmUninstall() }
-        } message: { _ in
-            Text(model.confirmationMessage)
-        }
+        .task { model.reloadIfNeeded() }
     }
 
     private var applicationList: some View {
@@ -39,7 +34,7 @@ struct UninstallView: View {
                 VStack(alignment: .leading, spacing: 1) {
                     Text(app.name).lineLimit(1)
                     Text(ByteText.string(app.sizeBytes))
-                        .font(.caption)
+                        .font(Theme.Typography.caption)
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
                 }
@@ -47,7 +42,7 @@ struct UninstallView: View {
                 if app.isRunning {
                     // Not an error, just a precondition the user can clear themselves.
                     Text("Running")
-                        .font(.caption2)
+                        .font(Theme.Typography.caption)
                         .foregroundStyle(.secondary)
                 }
             }
@@ -64,6 +59,26 @@ struct UninstallView: View {
         }
     }
 
+}
+
+/// The right column: what removing the selected application would delete.
+struct UninstallDetailView: View {
+    @Bindable var model: UninstallModel
+
+    var body: some View {
+        detail
+            .alert(
+                "Uninstall \(model.selected?.name ?? "")?",
+                isPresented: $model.isConfirming,
+                presenting: model.selected
+            ) { _ in
+                Button("Cancel", role: .cancel) {}
+                Button("Move to Trash", role: .destructive) { model.confirmUninstall() }
+            } message: { _ in
+                Text(model.confirmationMessage)
+            }
+    }
+
     @ViewBuilder
     private var detail: some View {
         if let app = model.selected {
@@ -72,7 +87,7 @@ struct UninstallView: View {
                 Divider()
 
                 Text("Select what to remove")
-                    .font(.headline)
+                    .font(Theme.Typography.headline)
 
                 List {
                     ForEach(model.residue) { item in
@@ -81,14 +96,14 @@ struct UninstallView: View {
                                 VStack(alignment: .leading, spacing: 1) {
                                     Text(item.kind.label)
                                     Text(displayPath(item.url))
-                                        .font(.caption)
+                                        .font(Theme.Typography.caption)
                                         .foregroundStyle(.secondary)
                                         .lineLimit(1)
                                         .truncationMode(.middle)
                                 }
                                 Spacer()
                                 Text(ByteText.string(item.sizeBytes))
-                                    .font(.caption)
+                                    .font(Theme.Typography.caption)
                                     .foregroundStyle(.secondary)
                                     .monospacedDigit()
                             }
@@ -104,8 +119,9 @@ struct UninstallView: View {
                 if model.residue.count == 1 {
                     Text("No support files were found for this app. Runwell matches them "
                          + "by bundle identifier, so it will not list files it cannot "
-                         + "confirm belong to this app.")
-                        .font(.callout)
+                         + "confirm belong to this app. macOS also protects some app "
+                         + "data from being read, so there may be more than this shows.")
+                        .font(Theme.Typography.callout)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -113,6 +129,9 @@ struct UninstallView: View {
                 footer(app)
             }
             .padding(Theme.Spacing.section)
+            // Fill the column rather than hugging the content: without this the
+            // pane centres itself and the file list reads as a floating card.
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         } else {
             ContentUnavailableView(
                 "Select an application",
@@ -126,10 +145,10 @@ struct UninstallView: View {
         HStack(spacing: Theme.Spacing.card) {
             AppIconView(url: app.bundleURL, size: 48)
             VStack(alignment: .leading, spacing: 2) {
-                Text(app.name).font(.title2)
+                Text(app.name).font(Theme.Typography.title)
                 if let id = app.bundleID {
                     Text(id)
-                        .font(.caption)
+                        .font(Theme.Typography.caption)
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
                 }
@@ -154,24 +173,24 @@ struct UninstallView: View {
                         .foregroundStyle(.orange)
                     ForEach(outcome.failed, id: \.url) { failure in
                         Text("\(failure.url.lastPathComponent): \(failure.reason)")
-                            .font(.caption)
+                            .font(Theme.Typography.caption)
                             .foregroundStyle(.secondary)
                     }
                 }
             }
-            .font(.callout)
+            .font(Theme.Typography.callout)
         }
 
         if let error = model.errorMessage {
             Label(error, systemImage: "exclamationmark.triangle")
-                .font(.callout)
+                .font(Theme.Typography.callout)
                 .foregroundStyle(.orange)
                 .fixedSize(horizontal: false, vertical: true)
         }
 
         HStack {
             Text(model.selectionSummary)
-                .font(.callout)
+                .font(Theme.Typography.callout)
                 .foregroundStyle(.secondary)
                 .monospacedDigit()
             Spacer()
@@ -257,6 +276,14 @@ final class UninstallModel {
     func reload() {
         applications = service.installedApplications()
         refreshResidue()
+    }
+
+    /// Scanning /Applications sizes every bundle on disk, which is far too costly to
+    /// repeat each time the column re-renders. The list is loaded once and refreshed
+    /// explicitly after an uninstall.
+    func reloadIfNeeded() {
+        guard applications.isEmpty else { return }
+        reload()
     }
 
     /// Recomputed whenever the selection changes, so the file list always describes

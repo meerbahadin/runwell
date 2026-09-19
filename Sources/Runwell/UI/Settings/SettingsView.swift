@@ -12,6 +12,7 @@ struct SettingsView: View {
 
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
+                SectionHeading("Settings")
                 backgroundSection(environment: environment)
                 Divider()
                 sampling(environment: environment)
@@ -30,7 +31,6 @@ struct SettingsView: View {
             .frame(maxWidth: 720, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .navigationTitle("Settings")
         .task { statistics = await environment.historyStatistics() }
         .alert("Delete all history?", isPresented: $confirmingClear) {
             Button("Cancel", role: .cancel) { confirmingClear = false }
@@ -54,20 +54,20 @@ struct SettingsView: View {
         if let background = environment.background {
             @Bindable var background = background
             VStack(alignment: .leading, spacing: 10) {
-                Text("Recording").font(.headline)
+                Text("Recording").font(Theme.Typography.headline)
 
                 Toggle("Keep recording when the window is closed", isOn: $background.runsInBackground)
                 Text(background.statusDescription)
-                    .font(.callout).foregroundStyle(.secondary)
+                    .font(Theme.Typography.callout).foregroundStyle(.secondary)
 
                 Toggle("Start Runwell when I log in", isOn: $background.launchesAtLogin)
                 Text("Without this, nothing is recorded until you open the app — so an overnight battery drain would be missed.")
-                    .font(.callout).foregroundStyle(.secondary)
+                    .font(Theme.Typography.callout).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
 
                 if let error = background.loginItemError {
                     Label(error, systemImage: "exclamationmark.triangle")
-                        .font(.callout).foregroundStyle(.orange)
+                        .font(Theme.Typography.callout).foregroundStyle(.orange)
                 }
             }
         }
@@ -77,7 +77,7 @@ struct SettingsView: View {
 
     private func sampling(environment: AppEnvironment) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Sampling").font(.headline)
+            Text("Sampling").font(Theme.Typography.headline)
             // Section 5.1: a longer interval means less observer effect, which is the
             // Section 1.3 principle that the monitor must not itself drain the battery.
             Picker("Interval", selection: Binding(
@@ -91,7 +91,7 @@ struct SettingsView: View {
             .pickerStyle(.radioGroup)
 
             Text("A shorter interval updates sooner and costs slightly more energy.")
-                .font(.callout).foregroundStyle(.secondary)
+                .font(Theme.Typography.callout).foregroundStyle(.secondary)
         }
     }
 
@@ -99,7 +99,7 @@ struct SettingsView: View {
 
     private func display(environment: AppEnvironment) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Display").font(.headline)
+            Text("Display").font(Theme.Typography.headline)
             // Section 5.3: the default is raw macOS-style percentage, which may exceed
             // 100% for a multithreaded process; a setting switches to normalized.
             Toggle("Show CPU as a share of all cores (0–100%)", isOn: Binding(
@@ -109,7 +109,7 @@ struct SettingsView: View {
             Text(environment.normalizeCPU
                  ? "A process using every core reads as 100%."
                  : "Matches Activity Monitor: a process using four cores reads as 400%.")
-                .font(.callout).foregroundStyle(.secondary)
+                .font(Theme.Typography.callout).foregroundStyle(.secondary)
         }
     }
 
@@ -117,7 +117,7 @@ struct SettingsView: View {
 
     private func historySection(environment: AppEnvironment) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("History").font(.headline)
+            Text("History").font(Theme.Typography.headline)
 
             // Section 7.2 / 9.1: history is optional and can be cleared at any time.
             Toggle("Record history on this Mac", isOn: Binding(
@@ -126,11 +126,11 @@ struct SettingsView: View {
             ))
 
             Text("Samples stay on this Mac. Nothing is uploaded.")
-                .font(.callout).foregroundStyle(.secondary)
+                .font(Theme.Typography.callout).foregroundStyle(.secondary)
 
             if let error = environment.historyError {
                 Label(error, systemImage: "exclamationmark.triangle")
-                    .font(.callout).foregroundStyle(.orange)
+                    .font(Theme.Typography.callout).foregroundStyle(.orange)
             }
 
             if let statistics {
@@ -155,13 +155,13 @@ struct SettingsView: View {
                         }
                     }
                 }
-                .font(.callout)
+                .font(Theme.Typography.callout)
             }
 
             // Section 7.2 retention tiers, stated rather than buried.
             Text("Raw samples are kept for 2 hours, per-minute totals for 7 days and "
                  + "15-minute totals for 30 days.")
-                .font(.callout).foregroundStyle(.secondary)
+                .font(Theme.Typography.callout).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
             if environment.historyWasTrimmed {
@@ -171,7 +171,7 @@ struct SettingsView: View {
                      + "removed. Longer 15-minute history is unaffected. The file "
                      + "itself shrinks as reclaimed space is returned, which can lag "
                      + "behind the deletion.")
-                    .font(.callout).foregroundStyle(.secondary)
+                    .font(Theme.Typography.callout).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
@@ -184,12 +184,12 @@ struct SettingsView: View {
 
     private func about(environment: AppEnvironment) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("About").font(.headline)
+            Text("About").font(Theme.Typography.headline)
             Button("Show the introduction again") {
                 environment.hasCompletedOnboarding = false
             }
             Text("Explains what Runwell measures, and what this Mac can report.")
-                .font(.callout).foregroundStyle(.secondary)
+                .font(Theme.Typography.callout).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -198,7 +198,7 @@ struct SettingsView: View {
 
     private func alerts(environment: AppEnvironment) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Alerts").font(.headline)
+            Text("Alerts").font(Theme.Typography.headline)
             Toggle("Notify me about sustained high energy use", isOn: Binding(
                 get: { environment.areNotificationsEnabled },
                 set: { environment.areNotificationsEnabled = $0 }
@@ -206,7 +206,7 @@ struct SettingsView: View {
             // Section 8.3: rules need a condition to hold, so alerts do not fire on
             // a momentary spike.
             Text("Off by default. Runwell only alerts when a condition lasts — at least a minute of high energy, or two minutes of background activity — and never sends more than one notification every few minutes. Insights always appear in the app regardless of this setting.")
-                .font(.callout).foregroundStyle(.secondary)
+                .font(Theme.Typography.callout).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
             // A denied system permission silently swallows every banner, which is
@@ -217,7 +217,7 @@ struct SettingsView: View {
                     "macOS is blocking notifications for Runwell. Turn them on in System Settings › Notifications › Runwell.",
                     systemImage: "exclamationmark.triangle.fill"
                 )
-                .font(.caption)
+                .font(Theme.Typography.caption)
                 .foregroundStyle(.orange)
                 .fixedSize(horizontal: false, vertical: true)
             }
@@ -228,7 +228,7 @@ struct SettingsView: View {
 
     private var privacy: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Privacy").font(.headline)
+            Text("Privacy").font(Theme.Typography.headline)
             // Section 9.1, stated plainly because it is a product promise.
             ForEach([
                 "No account, analytics or advertising.",
@@ -237,7 +237,7 @@ struct SettingsView: View {
                 "Home directory names are removed from stored paths and exports.",
             ], id: \.self) { line in
                 Label(line, systemImage: "checkmark.shield")
-                    .font(.callout).foregroundStyle(.secondary)
+                    .font(Theme.Typography.callout).foregroundStyle(.secondary)
             }
         }
     }

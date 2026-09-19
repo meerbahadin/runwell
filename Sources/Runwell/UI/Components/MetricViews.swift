@@ -65,7 +65,7 @@ struct ProvenanceBadge: View {
         } icon: {
             if !compact { Image(systemName: symbol) }
         }
-        .font(.caption2)
+        .font(Theme.Typography.caption)
         .padding(.horizontal, compact ? 4 : 6)
         .padding(.vertical, 2)
         .background(tint.opacity(0.15), in: Capsule())
@@ -207,7 +207,7 @@ struct StatusBadge: View {
     var body: some View {
         if let label = status.label, let symbol = status.symbolName {
             Label(label, systemImage: symbol)
-                .font(.caption)
+                .font(Theme.Typography.caption)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 2)
                 .background(tint.opacity(0.15), in: Capsule())

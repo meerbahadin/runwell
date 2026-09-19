@@ -11,6 +11,7 @@ struct DiagnosticsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
+                SectionHeading("Diagnostics")
                 system
                 Divider()
                 collectors
@@ -25,12 +26,11 @@ struct DiagnosticsView: View {
             .frame(maxWidth: 720, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .navigationTitle("Diagnostics")
     }
 
     private var system: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("System").font(.headline)
+            Text("System").font(Theme.Typography.headline)
             Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 6) {
                 GridRow {
                     Text("macOS build").foregroundStyle(.secondary)
@@ -49,7 +49,7 @@ struct DiagnosticsView: View {
                     Text(environment.capabilities.hasBattery ? "Present" : "None — resource-monitor mode")
                 }
             }
-            .font(.callout)
+            .font(Theme.Typography.callout)
         }
     }
 
@@ -57,7 +57,7 @@ struct DiagnosticsView: View {
     /// independently and shows a visible reason rather than silently reporting zero.
     private var collectors: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Collectors").font(.headline)
+            Text("Collectors").font(Theme.Typography.headline)
             ForEach(Collector.allCases, id: \.self) { collector in
                 if let status = environment.capabilities.status(collector) {
                     HStack(alignment: .firstTextBaseline, spacing: 10) {
@@ -70,7 +70,7 @@ struct DiagnosticsView: View {
                                 ProvenanceBadge(provenance: status.provenance, compact: true)
                             }
                             Text(status.reason)
-                                .font(.caption).foregroundStyle(.secondary)
+                                .font(Theme.Typography.caption).foregroundStyle(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                         Spacer()
@@ -83,7 +83,7 @@ struct DiagnosticsView: View {
 
     private var sampling: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Sampler").font(.headline)
+            Text("Sampler").font(Theme.Typography.headline)
             if let snapshot = environment.snapshot {
                 Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 6) {
                     GridRow {
@@ -113,7 +113,7 @@ struct DiagnosticsView: View {
                         Text("\(snapshot.coverage.inaccessibleProcessCount)").monospacedDigit()
                     }
                 }
-                .font(.callout)
+                .font(Theme.Typography.callout)
             } else {
                 Text("Waiting for the first sample…").foregroundStyle(.secondary)
             }
@@ -147,9 +147,9 @@ struct DiagnosticsView: View {
 
     private var actions: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Report").font(.headline)
+            Text("Report").font(Theme.Typography.headline)
             Text("Copies the values on this page. Section 9.1: no process list, paths or command lines are included.")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(Theme.Typography.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             Button {
                 environment.actions.copyToPasteboard(report)
@@ -203,7 +203,7 @@ struct SleepAssertionPanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Sleep prevention").font(.headline)
+            Text("Sleep prevention").font(Theme.Typography.headline)
 
             if let captured {
                 let sleepers = captured.filter { $0.kind.isSystemLevel }
@@ -211,12 +211,12 @@ struct SleepAssertionPanel: View {
                 Text(displayAsleep
                      ? "The display is off, so these are being judged."
                      : "The display is on, so none of these count yet — an app keeping the Mac awake while you are using it is not a problem.")
-                    .font(.callout).foregroundStyle(.secondary)
+                    .font(Theme.Typography.callout).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
 
                 if sleepers.isEmpty {
                     Text("Nothing is preventing sleep.")
-                        .font(.callout).foregroundStyle(.secondary)
+                        .font(Theme.Typography.callout).foregroundStyle(.secondary)
                 } else {
                     ForEach(sleepers) { assertion in
                         row(for: assertion, displayAsleep: displayAsleep)
@@ -225,13 +225,13 @@ struct SleepAssertionPanel: View {
             } else {
                 // Section 4: unreadable is unknown, not "nothing".
                 Text("The power-assertion interface did not answer, so Runwell cannot tell.")
-                    .font(.callout).foregroundStyle(.secondary)
+                    .font(Theme.Typography.callout).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
             if let outcome {
                 Text(outcome)
-                    .font(.callout)
+                    .font(Theme.Typography.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -302,10 +302,10 @@ struct SleepAssertionPanel: View {
                 Text(displayName(for: assertion, member: member))
                     .fontWeight(.medium)
                 Text(assertion.name)
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(Theme.Typography.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 Text(verdict(isSystem: isSystem, displayAsleep: displayAsleep))
-                    .font(.caption)
+                    .font(Theme.Typography.caption)
                     .foregroundStyle(flagged ? .orange : .secondary)
             }
             Spacer(minLength: 0)
@@ -314,7 +314,7 @@ struct SleepAssertionPanel: View {
             // protection policy still decides: a system daemon offers no button.
             if canQuit {
                 Button("Quit") { confirming = assertion }
-                    .font(.caption)
+                    .font(Theme.Typography.caption)
                     .help("Quits this process so it stops holding the Mac awake.")
             }
         }
