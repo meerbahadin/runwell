@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import SQLite3
 @testable import RunwellKit
 
 /// Section 7 and the Section 12.2 acceptance criterion: "History survives relaunch,
@@ -688,6 +689,76 @@ struct HistoryStoreTests {
         let days = try await store.batteryDays(
             from: midday.addingTimeInterval(-3600), to: midday.addingTimeInterval(7200))
         #expect(days[0].percentagePerHour == nil)
+    }
+
+    // MARK: - Reclaiming space on databases that predate auto_vacuum
+
+    /// Builds a database in the state every pre-2026-09-09 install is actually in:
+    /// tables created while `auto_vacuum` was still NONE. SQLite ignores the pragma
+    /// once a table exists, so this cannot be produced by configuration alone — the
+    /// table has to be created first, exactly as it was in the shipped app.
+    /// Built with the raw C API rather than `Database`, because `Database` is now
+    /// the thing that performs the conversion — using it here would convert the
+    /// fixture before the test could assert anything about it.
+    private func makeLegacyDatabase(at url: URL) throws {
+        var handle: OpaquePointer?
+        let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE
+        #expect(sqlite3_open_v2(url.path, &handle, flags, nil) == SQLITE_OK)
+        defer { sqlite3_close_v2(handle) }
+        // Order matters: the pragma only takes effect while the file has no tables,
+        // and creating one afterwards is what locks the mode in.
+        #expect(sqlite3_exec(handle, "PRAGMA auto_vacuum = NONE", nil, nil, nil) == SQLITE_OK)
+        #expect(sqlite3_exec(
+            handle, "CREATE TABLE placeholder (id INTEGER PRIMARY KEY)",
+            nil, nil, nil) == SQLITE_OK)
+
+        // Guard the premise: if this is not 0 the test proves nothing.
+        var statement: OpaquePointer?
+        #expect(sqlite3_prepare_v2(handle, "PRAGMA auto_vacuum", -1, &statement, nil) == SQLITE_OK)
+        defer { sqlite3_finalize(statement) }
+        #expect(sqlite3_step(statement) == SQLITE_ROW)
+        #expect(sqlite3_column_int64(statement, 0) == 0, "fixture must start with auto_vacuum = NONE")
+    }
+
+    @Test("A database created before auto_vacuum existed is converted on open")
+    func legacyDatabaseAdoptsIncrementalVacuum() async throws {
+        let url = temporaryURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        try makeLegacyDatabase(at: url)
+
+        // Opening through the normal path must convert it.
+        let database = try Database(path: url.path)
+        var mode: Int64 = -1
+        try database.prepare("PRAGMA auto_vacuum").query { mode = $0.int(0) }
+        #expect(mode == 2, "legacy database should be converted to INCREMENTAL")
+    }
+
+    /// The bug this guards: with `auto_vacuum = NONE`, `incremental_vacuum` is a
+    /// no-op, so the ceiling loop deleted a day of history per iteration, saw the
+    /// page count never move, and ran to the end — removing 88% of recorded history
+    /// on the real database while freeing nothing at all.
+    @Test("The size ceiling stops instead of deleting history it cannot reclaim")
+    func sizeLimitDoesNotDeleteWithoutReclaiming() async throws {
+        let url = temporaryURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let store = try HistoryStore(url: url)
+        let now = Date()
+
+        // Seven days of minute history, one row per day.
+        for day in 0..<7 {
+            try await store.record(
+                snapshot(app: "Steady", energyNJ: 1_000_000_000),
+                at: now.addingTimeInterval(-Double(day) * 86_400))
+        }
+        let before = try await store.statistics(url: url).bucketRows
+
+        // A limit of 1 byte can never be met, so the loop runs to exhaustion. It
+        // must still not strip the history down to a single day.
+        _ = try await store.enforceSizeLimit(1, now: now)
+
+        let after = try await store.statistics(url: url).bucketRows
+        #expect(after > 1, "ceiling must not empty the 1m tier when it cannot reclaim")
+        #expect(after >= before - 1, "at most one day should be dropped per pass")
     }
 
 }

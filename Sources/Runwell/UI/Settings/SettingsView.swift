@@ -168,7 +168,9 @@ struct SettingsView: View {
                 // Dropping recorded history is not something to do quietly: the user
                 // asked for a retention window and is getting less than it.
                 Text("History grew past 200 MB, so the oldest per-minute detail was "
-                     + "removed to stay within it. Longer 15-minute history is unaffected.")
+                     + "removed. Longer 15-minute history is unaffected. The file "
+                     + "itself shrinks as reclaimed space is returned, which can lag "
+                     + "behind the deletion.")
                     .font(.callout).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }

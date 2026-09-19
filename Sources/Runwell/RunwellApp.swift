@@ -73,6 +73,7 @@ struct RootView: View {
         case overview = "Overview"
         case applications = "Applications"
         case history = "History"
+        case uninstall = "Uninstall"
         case diagnostics = "Diagnostics"
         case settings = "Settings"
         var id: String { rawValue }
@@ -82,6 +83,7 @@ struct RootView: View {
             case .overview: "gauge.with.dots.needle.bottom.50percent"
             case .applications: "list.bullet.rectangle"
             case .history: "chart.xyaxis.line"
+            case .uninstall: "trash"
             case .diagnostics: "stethoscope"
             case .settings: "gearshape"
             }
@@ -104,7 +106,7 @@ struct RootView: View {
         // made AppKit reserve an extra column, which is what left the dead gutter
         // beside the detail content and squeezed the application table to a sliver.
         switch selection {
-        case .overview, .history, .diagnostics, .settings:
+        case .overview, .history, .uninstall, .diagnostics, .settings:
             // These surfaces have no per-row detail, so each takes the full width
             // beside the sidebar instead of stranding an empty third column.
             NavigationSplitView {
@@ -112,6 +114,7 @@ struct RootView: View {
             } detail: {
                 switch selection {
                 case .history: HistoryView()
+                case .uninstall: UninstallView()
                 case .diagnostics: DiagnosticsView()
                 case .settings: SettingsView()
                 default: OverviewView()

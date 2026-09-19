@@ -849,11 +849,24 @@ public actor HistoryStore {
         // meaningful saving.
         for days in stride(from: retention.minuteBucketDays - 1, through: 1, by: -1) {
             let cutoff = Int64(now.timeIntervalSince1970) - Int64(days) * 86_400
+            let before = fileSize()
             try database.execute(
                 "DELETE FROM bucket WHERE granularity = '1m' AND bucket_start < \(cutoff)")
+            // Only count an iteration as a loss if it actually removed rows: the
+            // first pass often deletes nothing (retention has just run the same
+            // cutoff), and reporting trimmed history the user still has is its own
+            // kind of lie.
+            if database.changes() > 0 { dropped = true }
             try? database.execute("PRAGMA incremental_vacuum(4096)")
-            dropped = true
-            if fileSize() <= limitBytes { break }
+
+            let after = fileSize()
+            if after <= limitBytes { break }
+            // If deleting a day of the largest tier freed nothing, freeing pages is
+            // not working on this database and no further iteration will help — it
+            // would just delete the rest of the minute history for no saving at all.
+            // That is exactly what shipped: on a database with auto_vacuum = NONE
+            // this loop removed 88% of recorded history and the file never moved.
+            if after >= before { break }
         }
         return dropped
     }

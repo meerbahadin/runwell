@@ -47,6 +47,33 @@ final class Database {
         // until the user clears everything. Set before any table exists on a new
         // database, since changing auto_vacuum later requires a full VACUUM.
         try execute("PRAGMA auto_vacuum = INCREMENTAL")
+        try adoptIncrementalVacuum()
+    }
+
+    /// The pragma above is silently ignored on a database that already has tables,
+    /// which is every database created before it was added. Those files reported
+    /// `auto_vacuum = 0` and so never reclaimed a single page: `incremental_vacuum`
+    /// is a no-op there, which in turn meant the retention size ceiling deleted
+    /// history in a loop while the file size never moved. Converting needs a full
+    /// VACUUM, so do it once, here, and only when the mode is actually wrong.
+    private func adoptIncrementalVacuum() throws {
+        var mode: Int64 = 0
+        try prepare("PRAGMA auto_vacuum").query { mode = $0.int(0) }
+        // 0 = NONE, 1 = FULL, 2 = INCREMENTAL. FULL also needs converting: it
+        // reclaims on every commit, which is the write cost this app avoided.
+        guard mode != 2 else { return }
+        // VACUUM rewrites the whole file, so it cannot run inside a transaction and
+        // needs free disk space roughly equal to the database. A failure here is not
+        // fatal — the app works, it just keeps the old growth behaviour — so it must
+        // not prevent the database from opening.
+        try? execute("PRAGMA auto_vacuum = INCREMENTAL")
+        try? execute("VACUUM")
+    }
+
+    /// Rows changed by the most recent statement. The size ceiling uses this to
+    /// tell "deleted a day of history" apart from "matched nothing".
+    func changes() -> Int {
+        Int(sqlite3_changes(handle))
     }
 
     /// Page accounting, for the retention size ceiling.
