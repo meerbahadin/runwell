@@ -183,9 +183,13 @@ matching the minute tier exactly to the nanojoule.
   protects other applications' container data, so some support files cannot be seen.
   Runwell lists only what it actually found and says so, rather than requesting Full
   Disk Access — an uninstaller is not worth that privilege.
-- **The app layer has no automated tests.** `AppEnvironment`, `BackgroundService` and
-  `NotificationService` are covered only by use. This is the honest known gap and the
-  source of most bugs found so far.
+- **The app layer has no automated tests.** `RunwellKit` — the collectors, metric
+  engine, grouping, insight rules and database — is covered by 109 tests.
+  `AppEnvironment`, `BackgroundService` and `NotificationService` are not, and are
+  covered only by daily use: the author has run Runwell as their actual battery
+  monitor since the first build, and 1.0.1 shipped after ten continuous days of it.
+  That catches what someone actually does; it does not catch what changes when
+  someone edits the code, which is what the tests are for.
 
 ## Contributing
 
