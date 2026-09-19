@@ -37,13 +37,34 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
 if [ "$UNIVERSAL" = "1" ]; then
+  # Both triples report the SAME --show-bin-path under the Xcode-backed build
+  # system, so the second build overwrites the first and lipo is handed one file
+  # twice ("same architectures (x86_64) found"). Each slice is therefore copied
+  # out to a staging path immediately after its own build, before the next build
+  # can replace it.
+  STAGE="$(mktemp -d)"
+  trap 'rm -rf "$STAGE"' EXIT
+
   echo "  -> arm64"
   swift build -c "$CONFIG" --package-path "$ROOT" --triple arm64-apple-macosx15.0
-  ARM_BIN="$(swift build -c "$CONFIG" --package-path "$ROOT" --triple arm64-apple-macosx15.0 --show-bin-path)/Runwell"
+  cp "$(swift build -c "$CONFIG" --package-path "$ROOT" --triple arm64-apple-macosx15.0 --show-bin-path)/Runwell" "$STAGE/Runwell.arm64"
+
   echo "  -> x86_64"
   swift build -c "$CONFIG" --package-path "$ROOT" --triple x86_64-apple-macosx15.0
-  X86_BIN="$(swift build -c "$CONFIG" --package-path "$ROOT" --triple x86_64-apple-macosx15.0 --show-bin-path)/Runwell"
-  lipo -create -output "$APP/Contents/MacOS/Runwell" "$ARM_BIN" "$X86_BIN"
+  cp "$(swift build -c "$CONFIG" --package-path "$ROOT" --triple x86_64-apple-macosx15.0 --show-bin-path)/Runwell" "$STAGE/Runwell.x86_64"
+
+  # Verify each slice is the architecture it claims to be before merging. Without
+  # this, a build system that silently ignores --triple produces two identical
+  # slices and the only symptom is lipo's own error message.
+  for arch in arm64 x86_64; do
+    actual="$(lipo -archs "$STAGE/Runwell.$arch")"
+    if [ "$actual" != "$arch" ]; then
+      echo "error: the $arch build produced '$actual' instead — refusing to merge." >&2
+      exit 1
+    fi
+  done
+
+  lipo -create -output "$APP/Contents/MacOS/Runwell" "$STAGE/Runwell.arm64" "$STAGE/Runwell.x86_64"
   echo "  -> $(lipo -info "$APP/Contents/MacOS/Runwell")"
 else
   swift build -c "$CONFIG" --package-path "$ROOT"
