@@ -170,9 +170,9 @@ Swift Package Manager, two targets:
 Storage is tiered: raw samples for 2 hours, per-minute totals for 7 days, 15-minute
 totals for 30 days, with a size ceiling above that. The 15-minute tier is rolled up
 from the minute tier during retention rather than written live, and rows are keyed by
-a short digest rather than a filesystem path — a detail that is worth ~5x on disk.
-See [`docs/storage-growth-fix.md`](docs/storage-growth-fix.md) for how that was
-measured.
+a short digest rather than a filesystem path. Together those changes took a measured
+76 MB/day down to 14.6 MB/day over three days of real use, with the rolled-up tier
+matching the minute tier exactly to the nanojoule.
 
 ## Known limitations
 

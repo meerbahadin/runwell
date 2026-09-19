@@ -7,3 +7,6 @@ build/
 .agents/
 .claude/
 skills-lock.json
+
+# Internal working notes: diagnosis write-ups, not user-facing documentation.
+docs/
