@@ -4,7 +4,7 @@
 
 # Runwell
 
-**A macOS battery monitor that tells you what it cannot measure.**
+**A macOS battery monitor that labels every number — including the ones it doesn't have.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 ![Platform](https://img.shields.io/badge/macOS-15%2B-lightgrey)
