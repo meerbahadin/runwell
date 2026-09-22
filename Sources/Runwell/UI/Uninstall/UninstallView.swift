@@ -126,24 +126,23 @@ struct UninstallDetailView: View {
                 // why an app with no support files was the one that broke. Bound it
                 // to its content instead, up to a scrolling ceiling.
                 .frame(height: min(CGFloat(model.residue.count) * 44 + 16, 320))
-                .fixedSize(horizontal: false, vertical: true)
 
-                // Always in the tree, hidden rather than absent when it does not
-                // apply. As an `if`, this paragraph appeared only for an app with no
-                // support files, so selecting one changed the height of the stack
-                // mid-update and the split view re-laid out its columns around it —
-                // which is what blanked the window on exactly those apps.
-                Text("No support files were found for this app. Runwell matches them "
-                     + "by bundle identifier, so it will not list files it cannot "
-                     + "confirm belong to this app. macOS also protects some app "
-                     + "data from being read, so there may be more than this shows.")
-                    .font(Theme.Typography.callout)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .opacity(model.residue.count == 1 ? 1 : 0)
-                    .frame(height: model.residue.count == 1 ? nil : 0, alignment: .top)
-                    .clipped()
-                    .accessibilityHidden(model.residue.count != 1)
+                if model.residue.count == 1 {
+                    // No `.fixedSize(vertical:)` here. Letting this paragraph claim
+                    // whatever height its text needs fed a loop: the taller stack
+                    // grew the column, the column's new width re-wrapped the text,
+                    // and the measured height ran away — 915pt to 3147pt in two
+                    // passes on a 915pt window, which scrolled every column off
+                    // screen and read as a blank app. The text wraps to the width it
+                    // is given and the stack stays the size of the window.
+                    Text("No support files were found for this app. Runwell matches them "
+                         + "by bundle identifier, so it will not list files it cannot "
+                         + "confirm belong to this app. macOS also protects some app "
+                         + "data from being read, so there may be more than this shows.")
+                        .font(Theme.Typography.callout)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
 
                 footer(app)
             }
@@ -204,7 +203,10 @@ struct UninstallDetailView: View {
             Label(error, systemImage: "exclamationmark.triangle")
                 .font(Theme.Typography.callout)
                 .foregroundStyle(.orange)
-                .fixedSize(horizontal: false, vertical: true)
+                // Wraps to the width it is given rather than claiming the height its
+                // text wants: `.fixedSize(vertical:)` in this stack feeds a growth
+                // loop with the enclosing column (see the note above).
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
 
         HStack {
@@ -452,3 +454,4 @@ final class UninstallModel {
         }
     }
 }
+

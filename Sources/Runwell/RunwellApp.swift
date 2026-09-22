@@ -179,10 +179,6 @@ struct RootView: View {
             // material instead of the prominent style's opaque panel, which is what
             // leaves a hard seam between an opaque sidebar and white content.
             .navigationSplitViewStyle(.balanced)
-            // One identity for all four two-column surfaces: they share a shape, so
-            // switching between them should reuse the split view rather than rebuild
-            // it. Only a change in column count needs a new identity.
-            .id("two-column")
         case .uninstall:
             // Same three-column shape as Applications: a list of things on the left
             // and what is selected on the right. Putting this in the two-column case
@@ -202,12 +198,6 @@ struct RootView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
             .navigationSplitViewStyle(.balanced)
-            // Each branch of this switch sits at the same position in the view tree,
-            // so without distinct identities SwiftUI treats a tab change as one split
-            // view changing its column count rather than a different split view
-            // appearing. That morphing is what left a column laid out for the wrong
-            // shape and rendering empty.
-            .id(Surface.uninstall)
         case .applications:
             NavigationSplitView {
                 surfaceList
@@ -225,7 +215,6 @@ struct RootView: View {
                     )
                 }
             }
-            .id(Surface.applications)
         }
     }
 }
@@ -291,18 +280,29 @@ private struct FullHeightSidebar: NSViewRepresentable {
 
     func updateNSView(_ view: NSView, context: Context) {
         // The window is nil on the first pass and can change if the view is
-        // re-hosted, so this re-applies rather than assuming makeNSView caught it.
+        // re-hosted, so this re-applies rather than assuming makeNSView caught it —
+        // but only when something actually differs. Writing `styleMask` is not free:
+        // it makes AppKit re-lay out the whole window, and doing that from inside a
+        // SwiftUI update meant every selection change in a list tore down the
+        // window's layout mid-pass. That is what blanked all three columns at once,
+        // including a sidebar the selection has nothing to do with.
         configure(view.window)
     }
 
     private func configure(_ window: NSWindow?) {
         guard let window, window.isRunwellMainWindow else { return }
-        window.titlebarAppearsTransparent = true
-        window.titleVisibility = .hidden
+        if !window.titlebarAppearsTransparent {
+            window.titlebarAppearsTransparent = true
+        }
+        if window.titleVisibility != .hidden {
+            window.titleVisibility = .hidden
+        }
         // Keep the titlebar itself: removing it (`.fullSizeContentView` alone, or
         // `.hiddenTitleBar`) also removes the standard window material, which is
         // what produces the translucency in the first place.
-        window.styleMask.insert(.fullSizeContentView)
+        if !window.styleMask.contains(.fullSizeContentView) {
+            window.styleMask.insert(.fullSizeContentView)
+        }
     }
 }
 
