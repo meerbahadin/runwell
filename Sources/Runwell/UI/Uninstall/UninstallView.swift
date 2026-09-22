@@ -128,15 +128,22 @@ struct UninstallDetailView: View {
                 .frame(height: min(CGFloat(model.residue.count) * 44 + 16, 320))
                 .fixedSize(horizontal: false, vertical: true)
 
-                if model.residue.count == 1 {
-                    Text("No support files were found for this app. Runwell matches them "
-                         + "by bundle identifier, so it will not list files it cannot "
-                         + "confirm belong to this app. macOS also protects some app "
-                         + "data from being read, so there may be more than this shows.")
-                        .font(Theme.Typography.callout)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+                // Always in the tree, hidden rather than absent when it does not
+                // apply. As an `if`, this paragraph appeared only for an app with no
+                // support files, so selecting one changed the height of the stack
+                // mid-update and the split view re-laid out its columns around it —
+                // which is what blanked the window on exactly those apps.
+                Text("No support files were found for this app. Runwell matches them "
+                     + "by bundle identifier, so it will not list files it cannot "
+                     + "confirm belong to this app. macOS also protects some app "
+                     + "data from being read, so there may be more than this shows.")
+                    .font(Theme.Typography.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .opacity(model.residue.count == 1 ? 1 : 0)
+                    .frame(height: model.residue.count == 1 ? nil : 0, alignment: .top)
+                    .clipped()
+                    .accessibilityHidden(model.residue.count != 1)
 
                 footer(app)
             }

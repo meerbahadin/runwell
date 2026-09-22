@@ -156,38 +156,48 @@ struct UninstallServiceTests {
 
     // MARK: - What counts as an application
 
-    /// A URL handler or login item ships as a `.app` but has no window and belongs to
-    /// whatever installed it. Offering one for uninstall invites the user to delete
-    /// part of another application without realising it.
-    @Test("Background-only helpers are not offered as applications")
-    func backgroundOnlyHelpersAreExcluded() throws {
+    /// A URL handler ships as a `.app` but has no interface and belongs to whatever
+    /// installed it. Offering one for uninstall invites the user to delete part of
+    /// another application without realising it.
+    ///
+    /// A menu-bar app (`LSUIElement`) is the opposite case and must stay listed: no
+    /// Dock tile, but an application the user installed and may want to remove.
+    @Test("Background-only helpers are excluded, menu-bar apps are not")
+    func onlyBackgroundOnlyHelpersAreExcluded() throws {
         let directory = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
 
-        func makeBundle(_ name: String, info: [String: Any]) throws -> Bundle? {
-            let url = directory.appendingPathComponent("\(name).app/Contents", isDirectory: true)
-            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        func makeBundle(_ name: String, info: [String: Any]) throws -> (URL, Bundle?) {
+            let app = directory.appendingPathComponent("\(name).app", isDirectory: true)
+            let contents = app.appendingPathComponent("Contents", isDirectory: true)
+            let macos = contents.appendingPathComponent("MacOS", isDirectory: true)
+            try FileManager.default.createDirectory(at: macos, withIntermediateDirectories: true)
             var plist = info
             plist["CFBundleName"] = name
             plist["CFBundleIdentifier"] = "com.example.\(name)"
+            plist["CFBundleExecutable"] = name
+            plist["CFBundlePackageType"] = "APPL"
             let data = try PropertyListSerialization.data(
                 fromPropertyList: plist, format: .xml, options: 0)
-            try data.write(to: url.appendingPathComponent("Info.plist"))
-            return Bundle(url: url.deletingLastPathComponent())
+            try data.write(to: contents.appendingPathComponent("Info.plist"))
+            FileManager.default.createFile(atPath: macos.appendingPathComponent(name).path,
+                                           contents: Data())
+            return (app, Bundle(url: app))
         }
 
-        let normal = try makeBundle("Normal", info: [:])
-        let background = try makeBundle("Handler", info: ["LSBackgroundOnly": true])
-        let agent = try makeBundle("Agent", info: ["LSUIElement": true])
-        // Some bundles spell these as strings rather than booleans.
-        let stringly = try makeBundle("Stringly", info: ["LSBackgroundOnly": "1"])
+        let (normalURL, normal) = try makeBundle("Normal", info: [:])
+        let (bgURL, bg) = try makeBundle("Handler", info: ["LSBackgroundOnly": true])
+        let (stringURL, stringly) = try makeBundle("Stringly", info: ["LSBackgroundOnly": "1"])
+        let (menuURL, menu) = try makeBundle("MenuBar", info: ["LSUIElement": true])
 
-        #expect(UninstallService.isUninstallableApplication(normal))
-        #expect(!UninstallService.isUninstallableApplication(background))
-        #expect(!UninstallService.isUninstallableApplication(agent))
-        #expect(!UninstallService.isUninstallableApplication(stringly))
-        // A bundle with no readable Info.plist establishes nothing, so it is not offered.
-        #expect(!UninstallService.isUninstallableApplication(nil))
+        #expect(UninstallService.isUninstallableApplication(at: normalURL, bundle: normal))
+        #expect(!UninstallService.isUninstallableApplication(at: bgURL, bundle: bg))
+        #expect(!UninstallService.isUninstallableApplication(at: stringURL, bundle: stringly))
+        // Docker, Maccy and Scroll Reverser all set this; they belong in the list.
+        #expect(UninstallService.isUninstallableApplication(at: menuURL, bundle: menu),
+                "a menu-bar app is still an application the user installed")
+        // A bundle whose Info.plist cannot be read establishes nothing, so it is not offered.
+        #expect(!UninstallService.isUninstallableApplication(at: normalURL, bundle: nil))
     }
 
     // MARK: - Listing is cheap, sizing is separate

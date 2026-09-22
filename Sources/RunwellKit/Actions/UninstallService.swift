@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import UniformTypeIdentifiers
 
 /// Finding and removing installed applications, together with the support files
 /// they leave behind.
@@ -113,21 +114,40 @@ public struct UninstallService: Sendable {
     /// Whether a `.app` on disk is an application a person would recognise as
     /// installed, rather than a helper that merely uses the bundle format.
     ///
-    /// A URL handler or login item ships as a `.app` with `LSBackgroundOnly` or
-    /// `LSUIElement` set: it has no window, no Dock tile and often no icon, and it
-    /// belongs to whatever installed it. Listing one invites the user to delete a
-    /// piece of another application without knowing that is what they are doing,
-    /// which is the opposite of what an uninstaller is for.
+    /// Two questions, in order, because they are genuinely different:
     ///
-    /// A bundle with no readable Info.plist is excluded on the same principle as the
-    /// rest of this file: what cannot be established is not offered.
-    static func isUninstallableApplication(_ bundle: Bundle?) -> Bool {
+    /// 1. *Is this an application bundle at all?* That is the filesystem's own
+    ///    judgement, via `isApplicationKey` and the `.application` content type,
+    ///    rather than trusting a `.app` extension on a directory.
+    /// 2. *Is it an application a person installed and would choose to remove?*
+    ///    The type system cannot answer this — it reports `com.apple.application-bundle`
+    ///    for a URL-handler stub exactly as it does for Safari — so it takes
+    ///    `LSBackgroundOnly`, which marks a bundle that has no interface at all and
+    ///    exists only to service another app.
+    ///
+    /// `LSUIElement` deliberately does *not* exclude: a menu-bar app has no Dock tile
+    /// but is still an application the user installed and may well want gone. On this
+    /// machine that flag covers Docker, Maccy and Scroll Reverser, all of which belong
+    /// in the list.
+    static func isUninstallableApplication(at url: URL, bundle: Bundle?) -> Bool {
+        // The system's own answer to "is this an application", not the extension.
+        let values = try? url.resourceValues(forKeys: [.isApplicationKey, .contentTypeKey])
+        let isApplication = values?.isApplication == true
+            || values?.contentType?.conforms(to: .application) == true
+        guard isApplication else { return false }
+
+        // A bundle whose Info.plist cannot be read establishes nothing about itself,
+        // and this is code that deletes things: what cannot be established is not
+        // offered (Appendix F).
         guard let info = bundle?.infoDictionary else { return false }
+
+        // Background-only means no windows, no Dock tile, no user-facing existence:
+        // a URL handler or login item belonging to some other application. Offering
+        // one invites the user to delete part of an app they mean to keep. Some
+        // bundles spell the flag as a string rather than a boolean.
         if info["LSBackgroundOnly"] as? Bool == true { return false }
-        if info["LSUIElement"] as? Bool == true { return false }
-        // Some bundles spell these as strings ("1") rather than booleans.
         if (info["LSBackgroundOnly"] as? String) == "1" { return false }
-        if (info["LSUIElement"] as? String) == "1" { return false }
+
         return true
     }
 
@@ -198,7 +218,7 @@ public struct UninstallService: Sendable {
             for url in contents where url.pathExtension == "app" {
                 guard evaluate(bundleURL: url) == nil else { continue }
                 let bundle = Bundle(url: url)
-                guard Self.isUninstallableApplication(bundle) else { continue }
+                guard Self.isUninstallableApplication(at: url, bundle: bundle) else { continue }
                 let name = bundle?.infoDictionary?["CFBundleName"] as? String
                     ?? url.deletingPathExtension().lastPathComponent
                 apps.append(InstalledApp(
