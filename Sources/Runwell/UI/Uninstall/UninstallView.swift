@@ -24,6 +24,11 @@ struct UninstallListView: View {
                 .padding(.bottom, Theme.Spacing.md)
             applicationList
         }
+        // Claim the column's width, but not its height: `maxHeight: .infinity` here
+        // makes the stack claim the whole window including the area behind the title
+        // bar, which lifts the heading up under it. The List below already expands
+        // to fill whatever vertical space is left.
+        .frame(maxWidth: .infinity, alignment: .topLeading)
         .task { model.reloadIfNeeded() }
     }
 
@@ -115,6 +120,13 @@ struct UninstallDetailView: View {
                     }
                 }
                 .listStyle(.inset)
+                // A List has no intrinsic height: inside a VStack it claims all the
+                // vertical space it can get, which squeezed the surrounding columns
+                // until the window read as empty. Worst with a single row, which is
+                // why an app with no support files was the one that broke. Bound it
+                // to its content instead, up to a scrolling ceiling.
+                .frame(height: min(CGFloat(model.residue.count) * 44 + 16, 320))
+                .fixedSize(horizontal: false, vertical: true)
 
                 if model.residue.count == 1 {
                     Text("No support files were found for this app. Runwell matches them "
@@ -269,13 +281,57 @@ final class UninstallModel {
     var lastOutcome: UninstallService.Outcome?
     var errorMessage: String?
 
+    /// True while sizes for the current selection are still being measured, so the
+    /// footer can say so instead of printing a total that is about to change.
+    private(set) var isMeasuringResidue = false
+
+    /// The in-flight sizing walks. Held so that changing the selection, or
+    /// reloading, cancels work whose answer nobody is waiting for any more —
+    /// without this, clicking through ten apps leaves ten filesystem walks running.
+    private var residueSizingTask: Task<Void, Never>?
+    private var applicationSizingTask: Task<Void, Never>?
+
     var selected: UninstallService.InstalledApp? {
         applications.first { $0.id == selectedID }
     }
 
     func reload() {
         applications = service.installedApplications()
+        startMeasuringApplications()
         refreshResidue()
+    }
+
+    /// Sizes each listed bundle off the main actor, assigning results back as they
+    /// arrive so the list stays responsive while /Applications is measured.
+    private func startMeasuringApplications() {
+        applicationSizingTask?.cancel()
+        let service = self.service
+        let urls = applications.map(\.bundleURL)
+        applicationSizingTask = Task { [weak self] in
+            for url in urls {
+                if Task.isCancelled { return }
+                let size = await Task.detached(priority: .utility) {
+                    service.size(ofBundleAt: url)
+                }.value
+                guard let self, !Task.isCancelled else { return }
+                self.applySize(size, toApplicationAt: url)
+            }
+        }
+    }
+
+    /// Row identity is the bundle URL rather than an index: the list may have been
+    /// reloaded while this walk was in flight, and writing by position would put a
+    /// size on the wrong app.
+    private func applySize(_ size: Int64?, toApplicationAt url: URL) {
+        guard let index = applications.firstIndex(where: { $0.bundleURL == url }) else { return }
+        let app = applications[index]
+        applications[index] = UninstallService.InstalledApp(
+            bundleURL: app.bundleURL,
+            name: app.name,
+            bundleID: app.bundleID,
+            sizeBytes: size,
+            isRunning: app.isRunning
+        )
     }
 
     /// Scanning /Applications sizes every bundle on disk, which is far too costly to
@@ -289,12 +345,52 @@ final class UninstallModel {
     /// Recomputed whenever the selection changes, so the file list always describes
     /// the app actually shown.
     func refreshResidue() {
+        residueSizingTask?.cancel()
         guard let app = selected else {
             residue = []
+            isMeasuringResidue = false
             return
         }
+        // The paths are cheap to find; only their sizes are expensive. Showing them
+        // straight away is what keeps the click responsive — this used to walk every
+        // support folder inline, which froze the window on any app with a large
+        // cache until the walk finished.
         residue = service.residue(for: app)
         excluded = []
+        startMeasuringResidue(for: app.bundleURL)
+    }
+
+    private func startMeasuringResidue(for bundleURL: URL) {
+        let service = self.service
+        let urls = residue.map(\.url)
+        guard !urls.isEmpty else {
+            isMeasuringResidue = false
+            return
+        }
+        isMeasuringResidue = true
+        residueSizingTask = Task { [weak self] in
+            for url in urls {
+                if Task.isCancelled { return }
+                let size = await Task.detached(priority: .utility) {
+                    service.size(ofItemAt: url)
+                }.value
+                guard let self, !Task.isCancelled else { return }
+                // The selection may have moved on while this walk ran; a size for
+                // the previous app must not land in the current app's list.
+                guard self.selectedID == bundleURL else { return }
+                self.applySize(size, toResidueAt: url)
+            }
+            guard let self, !Task.isCancelled, self.selectedID == bundleURL else { return }
+            self.isMeasuringResidue = false
+        }
+    }
+
+    private func applySize(_ size: Int64?, toResidueAt url: URL) {
+        guard let index = residue.firstIndex(where: { $0.url == url }) else { return }
+        let item = residue[index]
+        residue[index] = UninstallService.Residue(
+            url: item.url, kind: item.kind, sizeBytes: size
+        )
     }
 
     var selectedResidue: [UninstallService.Residue] {
@@ -315,6 +411,12 @@ final class UninstallModel {
     /// than presenting a total that silently omits them.
     var selectionSummary: String {
         let chosen = selectedResidue
+        // While sizes are still being walked, a total would be a number that is
+        // about to change — worse here than saying nothing yet, because the user
+        // reads it to decide what they are about to delete.
+        if isMeasuringResidue {
+            return "\(chosen.count) item(s), measuring…"
+        }
         let known = chosen.compactMap(\.sizeBytes)
         let total = known.reduce(0, +)
         let unknown = chosen.count - known.count

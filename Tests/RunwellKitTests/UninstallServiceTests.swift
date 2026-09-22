@@ -134,4 +134,129 @@ struct UninstallServiceTests {
         // exact figure.
         #expect(size >= Int64(payload.count * 2))
     }
+
+    /// An app whose enclosing folder the user can write is removable, whatever the
+    /// bundle's own permission bits say. `isWritableFile` on the bundle reports false
+    /// for any quarantined download, which rejected 39 of 42 installed applications
+    /// and left this screen all but empty.
+    @Test("A quarantined app the user owns is still removable")
+    func quarantinedAppIsRemovable() throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let bundle = directory.appendingPathComponent("Quarantined.app", isDirectory: true)
+        try FileManager.default.createDirectory(at: bundle, withIntermediateDirectories: true)
+        // The attribute macOS sets on everything downloaded from the internet.
+        _ = try? bundle.withUnsafeFileSystemRepresentation { path -> Int32 in
+            let value = "0181;00000000;Safari;"
+            return setxattr(path, "com.apple.quarantine", value, value.utf8.count, 0, 0)
+        }
+        #expect(service.evaluate(bundleURL: bundle) == nil,
+                "an app inside a writable folder must be removable")
+    }
+
+    // MARK: - What counts as an application
+
+    /// A URL handler or login item ships as a `.app` but has no window and belongs to
+    /// whatever installed it. Offering one for uninstall invites the user to delete
+    /// part of another application without realising it.
+    @Test("Background-only helpers are not offered as applications")
+    func backgroundOnlyHelpersAreExcluded() throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        func makeBundle(_ name: String, info: [String: Any]) throws -> Bundle? {
+            let url = directory.appendingPathComponent("\(name).app/Contents", isDirectory: true)
+            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+            var plist = info
+            plist["CFBundleName"] = name
+            plist["CFBundleIdentifier"] = "com.example.\(name)"
+            let data = try PropertyListSerialization.data(
+                fromPropertyList: plist, format: .xml, options: 0)
+            try data.write(to: url.appendingPathComponent("Info.plist"))
+            return Bundle(url: url.deletingLastPathComponent())
+        }
+
+        let normal = try makeBundle("Normal", info: [:])
+        let background = try makeBundle("Handler", info: ["LSBackgroundOnly": true])
+        let agent = try makeBundle("Agent", info: ["LSUIElement": true])
+        // Some bundles spell these as strings rather than booleans.
+        let stringly = try makeBundle("Stringly", info: ["LSBackgroundOnly": "1"])
+
+        #expect(UninstallService.isUninstallableApplication(normal))
+        #expect(!UninstallService.isUninstallableApplication(background))
+        #expect(!UninstallService.isUninstallableApplication(agent))
+        #expect(!UninstallService.isUninstallableApplication(stringly))
+        // A bundle with no readable Info.plist establishes nothing, so it is not offered.
+        #expect(!UninstallService.isUninstallableApplication(nil))
+    }
+
+    // MARK: - Listing is cheap, sizing is separate
+
+    /// Sizing inside `residue(for:)` froze the window on any app with a large cache:
+    /// the walk ran on the main thread inside the selection setter, and the UI went
+    /// blank until it finished. Discovery must stay cheap, with sizes filled in
+    /// afterwards, off the main actor.
+    @Test("Listing support files does not measure them")
+    func residueDefersSizing() throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let bundle = directory.appendingPathComponent("Example.app", isDirectory: true)
+        try FileManager.default.createDirectory(at: bundle, withIntermediateDirectories: true)
+
+        let app = UninstallService.InstalledApp(
+            bundleURL: bundle, name: "Example", bundleID: "com.example.app",
+            sizeBytes: nil, isRunning: false
+        )
+        let items = service.residue(for: app)
+
+        #expect(!items.isEmpty)
+        #expect(
+            items.allSatisfy { $0.sizeBytes == nil },
+            "residue(for:) must not walk the filesystem; sizes arrive via size(ofItemAt:)"
+        )
+    }
+
+    /// The same contract for the application list: opening the tab must not block on
+    /// measuring every bundle in /Applications.
+    @Test("Listing installed applications does not measure them")
+    func installedApplicationsDeferSizing() {
+        let apps = service.installedApplications()
+        #expect(
+            apps.allSatisfy { $0.sizeBytes == nil },
+            "installedApplications() must not walk bundles; sizes arrive via size(ofBundleAt:)"
+        )
+    }
+
+    /// The deferred sizing call still has to produce a real answer, or the split
+    /// would trade a freeze for a column of em dashes.
+    @Test("The deferred sizing call measures what the listing skipped")
+    func deferredSizingMeasures() throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let payload = Data(repeating: 0, count: 4_096)
+        try payload.write(to: directory.appendingPathComponent("payload.bin"))
+
+        let size = try #require(service.size(ofItemAt: directory))
+        #expect(size >= Int64(payload.count))
+    }
+
+    /// A cancelled walk must report "unknown", never the partial total it had
+    /// accumulated — a half-counted directory is exactly the fabricated number the
+    /// rest of the app refuses to print.
+    @Test("A cancelled measurement returns nil rather than a partial total")
+    func cancelledSizingReturnsNil() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        // Enough files that the walk is still running when cancellation lands, and
+        // more than the 256-file cancellation check interval.
+        let payload = Data(repeating: 0, count: 512)
+        for index in 0..<2_000 {
+            try payload.write(to: directory.appendingPathComponent("file-\(index).bin"))
+        }
+
+        let service = self.service
+        let task = Task.detached(priority: .utility) { service.size(ofItemAt: directory) }
+        task.cancel()
+        #expect(await task.value == nil)
+    }
 }

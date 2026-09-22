@@ -179,6 +179,10 @@ struct RootView: View {
             // material instead of the prominent style's opaque panel, which is what
             // leaves a hard seam between an opaque sidebar and white content.
             .navigationSplitViewStyle(.balanced)
+            // One identity for all four two-column surfaces: they share a shape, so
+            // switching between them should reuse the split view rather than rebuild
+            // it. Only a change in column count needs a new identity.
+            .id("two-column")
         case .uninstall:
             // Same three-column shape as Applications: a list of things on the left
             // and what is selected on the right. Putting this in the two-column case
@@ -190,9 +194,20 @@ struct RootView: View {
                 UninstallListView(model: uninstallModel)
                     .navigationSplitViewColumnWidth(min: 260, ideal: 320)
             } detail: {
+                // Claim the full pane regardless of how much the selection produces.
+                // An app with no support files renders a shorter detail than one with
+                // several, and without this the split view re-laid out to that
+                // shorter content and pulled both columns up under the title bar.
                 UninstallDetailView(model: uninstallModel)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
             .navigationSplitViewStyle(.balanced)
+            // Each branch of this switch sits at the same position in the view tree,
+            // so without distinct identities SwiftUI treats a tab change as one split
+            // view changing its column count rather than a different split view
+            // appearing. That morphing is what left a column laid out for the wrong
+            // shape and rendering empty.
+            .id(Surface.uninstall)
         case .applications:
             NavigationSplitView {
                 surfaceList
@@ -210,6 +225,7 @@ struct RootView: View {
                     )
                 }
             }
+            .id(Surface.applications)
         }
     }
 }

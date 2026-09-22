@@ -67,11 +67,14 @@ struct ApplicationsView: View {
 
     private var header: some View {
         HStack(spacing: 12) {
-            Text("Application")
+            sortableHeader("Application", column: .name, width: nil, alignment: .leading)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            Text("Energy").frame(width: 90, alignment: .trailing)
-            Text("CPU").frame(width: 70, alignment: .trailing)
-            Text("Memory").frame(width: 90, alignment: .trailing)
+            sortableHeader("Energy", column: .energy, width: 90, alignment: .trailing)
+            sortableHeader("CPU", column: .cpu, width: 70, alignment: .trailing)
+            sortableHeader("Memory", column: .memory, width: 90, alignment: .trailing)
+            // Status is a derived label, not a measured quantity, and has no
+            // meaningful order to sort by — so it stays a plain heading rather than
+            // offering a control that would do nothing.
             Text("Status").frame(width: 150, alignment: .leading)
         }
         .font(Theme.Typography.caption)
@@ -82,6 +85,43 @@ struct ApplicationsView: View {
         // A thin material keeps the header legible over scrolling rows while the
         // window's own translucency still shows through.
         .background(.ultraThinMaterial)
+    }
+
+    /// A column heading that sorts the table by its own column.
+    ///
+    /// Drives the same `sortOrder` as the toolbar picker rather than keeping a
+    /// second notion of order: two controls that could disagree about how the table
+    /// is sorted would be a bug waiting to happen.
+    @ViewBuilder
+    private func sortableHeader(
+        _ title: String,
+        column: AppEnvironment.SortColumn,
+        width: CGFloat?,
+        alignment: Alignment
+    ) -> some View {
+        let isActive = environment.sortOrder == column
+        Button {
+            environment.sortOrder = column
+        } label: {
+            HStack(spacing: 2) {
+                if alignment == .trailing { Spacer(minLength: 0) }
+                Text(title)
+                // Only the active column carries a marker: every column showing one
+                // would say nothing about which is in effect. Direction is fixed
+                // per column (largest first for measurements, A-Z for name), so the
+                // chevron reports the order rather than offering to reverse it.
+                if isActive {
+                    Image(systemName: column == .name ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 8, weight: .semibold))
+                }
+                if alignment == .leading { Spacer(minLength: 0) }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(isActive ? Color.primary : Theme.Colors.subtleText)
+        .frame(width: width, alignment: alignment)
+        .help("Sort by \(title.lowercased())")
     }
 
     private func toggle(_ group: ApplicationGroup) {

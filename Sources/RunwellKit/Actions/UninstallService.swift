@@ -110,6 +110,27 @@ public struct UninstallService: Sendable {
         return directories
     }
 
+    /// Whether a `.app` on disk is an application a person would recognise as
+    /// installed, rather than a helper that merely uses the bundle format.
+    ///
+    /// A URL handler or login item ships as a `.app` with `LSBackgroundOnly` or
+    /// `LSUIElement` set: it has no window, no Dock tile and often no icon, and it
+    /// belongs to whatever installed it. Listing one invites the user to delete a
+    /// piece of another application without knowing that is what they are doing,
+    /// which is the opposite of what an uninstaller is for.
+    ///
+    /// A bundle with no readable Info.plist is excluded on the same principle as the
+    /// rest of this file: what cannot be established is not offered.
+    static func isUninstallableApplication(_ bundle: Bundle?) -> Bool {
+        guard let info = bundle?.infoDictionary else { return false }
+        if info["LSBackgroundOnly"] as? Bool == true { return false }
+        if info["LSUIElement"] as? Bool == true { return false }
+        // Some bundles spell these as strings ("1") rather than booleans.
+        if (info["LSBackgroundOnly"] as? String) == "1" { return false }
+        if (info["LSUIElement"] as? String) == "1" { return false }
+        return true
+    }
+
     /// Whether this bundle may be offered for uninstall at all.
     public func evaluate(bundleURL: URL) -> UninstallError? {
         let path = bundleURL.standardizedFileURL.path
@@ -122,9 +143,29 @@ public struct UninstallService: Sendable {
         if path == Bundle.main.bundleURL.standardizedFileURL.path {
             return .protected("This is Runwell itself.")
         }
-        guard FileManager.default.isWritableFile(atPath: path) else {
+        // Nor another copy of it. A development build runs from a different path than
+        // the installed one, so a path comparison alone would let the copy being
+        // tested offer to delete the copy in /Applications. Compare identity, not
+        // location — but only on the shared prefix, so a dev build (…Runwell.dev)
+        // still protects the release bundle and vice versa.
+        if let mine = Bundle.main.bundleIdentifier,
+           let theirs = Bundle(url: bundleURL)?.bundleIdentifier {
+            let root = { (id: String) in id.hasSuffix(".dev") ? String(id.dropLast(4)) : id }
+            if root(mine) == root(theirs) {
+                return .protected("This is Runwell.")
+            }
+        }
+        // Removal is a *move* to the Trash, so what matters is whether the enclosing
+        // directory can be written, not the bundle itself. Testing the bundle was
+        // wrong in a way that quietly emptied this screen: `isWritableFile` reports
+        // false for a quarantined bundle — which is nearly every app a user has ever
+        // downloaded — so 39 of 42 installed applications were rejected as "not
+        // writable by your account" despite being owned by that very account and
+        // perfectly removable in Finder.
+        let parent = bundleURL.standardizedFileURL.deletingLastPathComponent().path
+        guard FileManager.default.isWritableFile(atPath: parent) else {
             return .notRemovable(
-                "\(bundleURL.lastPathComponent) is not writable by your account.")
+                "\(bundleURL.lastPathComponent) is in a folder your account cannot modify.")
         }
         return nil
     }
@@ -132,6 +173,12 @@ public struct UninstallService: Sendable {
     // MARK: - Discovery
 
     /// Every user-installed application, newest listing first by name.
+    ///
+    /// Sizes are left unmeasured (`nil`). Measuring a bundle means walking every
+    /// file inside it, which for a folder the size of Xcode's takes long enough to
+    /// freeze a caller that waits on the main thread — so the size of each app is a
+    /// separate, cancellable step the caller runs off the main actor
+    /// (`size(ofBundleAt:)`).
     public func installedApplications() -> [InstalledApp] {
         let manager = FileManager.default
         let running = Set(
@@ -151,13 +198,14 @@ public struct UninstallService: Sendable {
             for url in contents where url.pathExtension == "app" {
                 guard evaluate(bundleURL: url) == nil else { continue }
                 let bundle = Bundle(url: url)
+                guard Self.isUninstallableApplication(bundle) else { continue }
                 let name = bundle?.infoDictionary?["CFBundleName"] as? String
                     ?? url.deletingPathExtension().lastPathComponent
                 apps.append(InstalledApp(
                     bundleURL: url,
                     name: name,
                     bundleID: bundle?.bundleIdentifier,
-                    sizeBytes: directorySize(of: url),
+                    sizeBytes: nil,
                     isRunning: running.contains(url.standardizedFileURL.path)
                 ))
             }
@@ -174,8 +222,12 @@ public struct UninstallService: Sendable {
     /// unrelated files — an app called "Mail" would match half of `~/Library` — and
     /// this is code that deletes things, so it errs entirely toward missing a
     /// leftover rather than removing something it does not own.
+    /// Sizes are left unmeasured here for the same reason as `installedApplications`:
+    /// a `Caches` folder can hold tens of thousands of files, and walking it inline
+    /// would block whoever asked. The caller fills sizes in afterwards via
+    /// `size(ofItemAt:)`.
     public func residue(for app: InstalledApp) -> [Residue] {
-        var items = [Residue(url: app.bundleURL, kind: .bundle, sizeBytes: app.sizeBytes)]
+        var items = [Residue(url: app.bundleURL, kind: .bundle, sizeBytes: nil)]
         guard let bundleID = app.bundleID, !bundleID.isEmpty else { return items }
 
         let home = FileManager.default.homeDirectoryForCurrentUser
@@ -202,9 +254,28 @@ public struct UninstallService: Sendable {
             // Runwell does not ask for Full Disk Access to make this exhaustive —
             // an uninstaller is not worth that privilege.
             guard FileManager.default.fileExists(atPath: url.path) else { continue }
-            items.append(Residue(url: url, kind: kind, sizeBytes: directorySize(of: url)))
+            items.append(Residue(url: url, kind: kind, sizeBytes: nil))
         }
         return items
+    }
+
+    // MARK: - Sizing
+
+    /// Bytes on disk for one removable item, or nil when the size could not be
+    /// measured.
+    ///
+    /// Deliberately separate from `residue(for:)` and `installedApplications()`:
+    /// this is the expensive half, and keeping it separate is what lets a caller
+    /// run it off the main thread and abandon it when the selection changes.
+    /// Honours task cancellation, so a superseded walk stops instead of running to
+    /// completion in the background.
+    public func size(ofItemAt url: URL) -> Int64? {
+        directorySize(of: url)
+    }
+
+    /// Bytes on disk for an installed application bundle.
+    public func size(ofBundleAt url: URL) -> Int64? {
+        directorySize(of: url)
     }
 
     // MARK: - Removal
@@ -283,7 +354,15 @@ public struct UninstallService: Sendable {
 
         var total: Int64 = 0
         var sawAnything = false
+        var checked = 0
         for case let child as URL in enumerator {
+            // A cancelled walk abandons the count rather than returning a partial
+            // total: half of a directory's size is not a size, and reporting one
+            // would be exactly the fabricated number the rest of the app refuses to
+            // print. Checked periodically because `isCancelled` is not free and
+            // these loops run to six figures.
+            checked += 1
+            if checked % 256 == 0, Task.isCancelled { return nil }
             guard let childValues = try? child.resourceValues(forKeys: keys) else { continue }
             if let bytes = childValues.totalFileAllocatedSize {
                 total += Int64(bytes)
